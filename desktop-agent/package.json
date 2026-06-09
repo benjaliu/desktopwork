@@ -1,0 +1,19 @@
+{
+  "name": "desktop-agent",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "vendor/bundles/agent-core.esm.js",
+  "scripts": {
+    "build": "echo 'Bundles are pre-built via scripts/extract-openclaw.mjs'",
+    "extract": "node ../../scripts/extract-openclaw.mjs --openclaw ../../vendor/openclaw --out vendor/bundles",
+    "rebuild": "pnpm extract"
+  },
+  "dependencies": {
+    "ignore": "^7.0.5",
+    "typebox": "^1.1.39",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}

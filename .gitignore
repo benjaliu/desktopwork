@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build output (bundles tracked, source maps excluded)
+*.esm.js.map
+!desktop-agent/vendor/bundles/*.esm.js
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test
+coverage/
+
+# Build output (desktop-agent compiled JS)
+desktop-agent/dist/
+
+# Temporary
+tmp/
+*.tmp
+# Vendor OpenClaw (source packages, build artifacts excluded)
+vendor/openclaw/node_modules/
+vendor/openclaw/packages/*/dist/
+vendor/openclaw/packages/*/*.map

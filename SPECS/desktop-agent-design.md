@@ -130,186 +130,187 @@ git commit -m "chore: update OpenClaw bundle"
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                  Desktop App (Tauri)                      │
-│                                                          │
-│  ┌──────────────┐      ┌────────────────────────────┐   │
-│  │  React UI    │◄────►│   Rust Backend             │   │
-│  │  (WebView)   │      │   - 进程生命周期管理         │   │
-│  │              │      │   - stdin/stdout IPC       │   │
-│  │  - Chat UI   │      │   - 配置持久化 │   │
-│  │  - Settings  │      │   - 日志收集 │   │
-│  └──────────────┘      └───────────┬────────────────┘   │
-│                                      │                   │
-│                         stdin/stdout │                   │
-│                         JSON-RPC     │                   │
-│                                      ▼                   │
-│                         ┌────────────────────────────┐   │
-│                         │   desktop-agent.mjs        │   │
-│                         │   (Node.js 长期进程)        │   │
-│                         │                             │   │
-│                         │   OpenClaw Bundles        │   │
-│                         │   (agent-core,             │   │
-│                         │    memory-host-sdk,        │   │
-│                         │    llm-core)               │   │
-│                         └────────────────────────────┘   │
+│                    Tauri Shell                          │
+│              (窗口管理 + 菜单 + 登录页)                 │
+│                     WebView                             │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │            Node.js HTTP Server                    │  │
+│  │   localhost:PORT (PORT 默认 3737，自动检测占用)   │  │
+│  │                                                  │  │
+│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐       │  │
+│  │   │ HTML A  │  │  HTML B  │  │  HTML C  │       │  │
+│  │   │ (本模块) │  │(外部引入) │  │(外部引入) │       │  │
+│  │ └──────────┘  └──────────┘ └──────────┘       │  │
+│  │                                                  │  │
+│  │   Auth / Config / Skills / Memory / LLM — 统一   │  │
+│  └──────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**核心设计原则：**
+1. **Node 层是核心** — 所有业务逻辑、Auth、Config、Agent 能力都在 Node 层
+2. **Tauri 只是包装** — 创建窗口、起 Node 进程、加载 WebView
+3. **HTML App 通过 window.* 拿能力** — Auth Token、Config、Agent Chat API
+4. **一套代码，两种部署** — 本地桌面（Tauri 包装）或 服务端（纯 Node）
 
 ### 2.2 数据流
 
 ```
 用户输入消息
     ↓
-React UI (App.tsx)
-    ↓ Tauri invoke("chat_send")
-Rust Backend (lib.rs)
-    ↓ stdin/stdout IPC (JSON-RPC)
-desktop-agent.mjs
-    ↓
-agentLoop() + memory engine + skills
-    ↓ 流式输出
-Rust Backend (逐行读取 stdout)
-    ↓ Tauri event emit
-React UI (显示流式回复)
+HTML App (WebView)
+    ↓ fetch POST /agent/chat
+Node HTTP Server
+    │
+    ├── loadSkills()          ← agent-core.loadSkills
+    ├── agentLoop(messages, streamFn)
+    │      │
+    │      └── buildStreamFn()  ← 协议适配层（自动检测 OpenAI / Anthropic）
+    │               │
+    │               └── fetch LLM API → SSE stream
+    │
+    └── SSE stream ──► HTML App
 ```
 
 ### 2.3 模块职责
 
 | 模块 | 职责 |
 |------|------|
-| **React UI** | 聊天界面、LLM 配置界面 |
-| **Rust Backend** | 进程管理、IPC 读写、配置持久化、日志 |
-| **desktop-agent (Node.js)** | Agent Loop、记忆引擎、Skills加载、LLM 调用 |
-| **OpenClaw Bundle: agent-core** | 核心 Agent 循环（消息→LLM→工具→回复） |
-| **OpenClaw Bundle: memory-host-sdk** | 记忆存储与检索 |
-| **OpenClaw Bundle: llm-core** | LLM provider 统一抽象 |
+| **Tauri Shell** | 起 Node 子进程、创建窗口、加载 WebView、菜单 |
+| **Node HTTP Server** | 业务逻辑：Auth、Config、Agent Chat、Skills、Memory |
+| **HTML App** | 通过 window.* 使用 Node 层能力（Auth、Config、Agent） |
+| **server/vendor/bundles/agent-core** | 核心 Agent 循环（agentLoop、loadSkills） |
+| **server/vendor/bundles/memory-host-sdk** | 记忆存储与检索 |
+| **server/vendor/bundles/llm-core** | SSE EventStream 流处理 |
 
 ---
 
-## 3. IPC 协议设计
+## 3. HTTP API Surface（Node 层对外接口）
 
 ### 3.1 协议概述
 
-Rust 与 Node.js 通过 **stdin/stdout** 交换 **JSON-RPC 2.0** 格式消息。每条消息以换行符分隔（NDJSON）。
+Node.js HTTP Server 对外提供 REST API，所有 HTML App 通过 fetch 调用。
 
 **通信模式**：
-- Rust → Node.js：`stdin` 写入请求
-- Node.js → Rust：`stdout` 写入响应/事件
-- stderr：Node.js 日志输出，由 Rust 收集
+- HTML App → Node Server：HTTP fetch（JSON body / SSE stream）
+- Shell → Node Server：HTTP（鉴权 Token 注入）
 
-### 3.2 请求格式（Rust → Node.js）
+**认证**：所有 API 需要 Header `Authorization: Bearer <token>`（Stub 实现为任意密码可登录）
 
-```typescript
-// 通用请求格式
-interface Request {
-  jsonrpc: "2.0";
-  id: string;           // 唯一请求 ID
-  method: string;       // 方法名
-  params?: unknown;     // 参数对象
-}
+### 3.2 Auth API
 
-// chat — 发送聊天消息（支持流式）
-{
-  "jsonrpc": "2.0",
-  "id": "msg-001",
-  "method": "chat",
-  "params": {
-    "message": "你好，帮我写一个 hello world",
-    "sessionKey": "desktop:main"
-  }
-}
+```
+POST /auth/login
+  Body:    { username: string, password: string }
+  Returns: { token: string, user: { userId, name, avatar? } }
+           或 { error: string }
 
-// status — 查询 agent 状态
-{
-  "jsonrpc": "2.0",
-  "id": "ping-001",
-  "method": "status"
-}
+POST /auth/logout
+  Headers: Authorization: Bearer <token>
+  Returns: { ok: true }
 
-// shutdown — 关闭 agent 进程
-{
-  "jsonrpc": "2.0",
-  "id": "shutdown-001",
-  "method": "shutdown"
-}
-
-// reload — 重载配置（LLM 配置变更后）
-{
-  "jsonrpc": "2.0",
-  "id": "reload-001",
-  "method": "reload"
-}
+GET  /auth/me
+  Headers: Authorization: Bearer <token>
+  Returns: { userId, name, role, createdAt }
 ```
 
-### 3.3 响应格式（Node.js → Rust）
+> **Stub 说明**：当前实现任意用户名+密码都能登录成功。后续替换为 OIDC（飞书/企微/Google Workspace）。
 
-```typescript
-// 成功响应
-{
-  "jsonrpc": "2.0",
-  "id": "msg-001",
-  "result": {
-    "text": "你好，有什么可以帮你？",
-    "sessionKey": "desktop:main"
-  }
-}
+### 3.3 Config API
 
-// 错误响应
-{
-  "jsonrpc": "2.0",
-  "id": "msg-001",
-  "error": {
-    "code": -32603,
-    "message": "LLM request failed: API key invalid"
+```
+GET  /config
+  Headers: Authorization: Bearer <token>
+  Returns: {
+    menu: [{ id, label, icon, appId }],
+    defaultApp: string,
+    theme: 'light'|'dark'|'system',
+    language: string
   }
-}
+
+GET  /config/apps/:appId
+  Headers: Authorization: Bearer <token>
+  Returns: { appId, name, config: { ... } }
+
+PATCH  /config/apps/:appId
+  Headers: Authorization: Bearer <token>
+  Body:   { ...partial config... }
+  Returns: { ok: true }
+
+GET  /config/agent
+  Headers: Authorization: Bearer <token>
+  Returns: { model, provider, apiKey, skills: [...] }
+
+PATCH  /config/agent
+  Headers: Authorization: Bearer <token>
+  Body:   { ...partial agent config... }
+  Returns: { ok: true }
 ```
 
-### 3.4 流式事件（Node.js → Rust）
+### 3.4 Agent Chat API
 
-```typescript
-// 流式 delta（每个 token/片段）
-{
-  "jsonrpc": "2.0",
-  "id": "msg-001",
-  "method": "stream",
-  "params": {
-    "delta": "你好",
-    "done": false
+```
+POST /agent/chat
+  Headers: Authorization: Bearer <token>
+  Body: {
+    appId: string,
+    message: string | AgentMessage[],
+    stream: true           // 默认 true
   }
-}
-
-// 流结束
-{
-  "jsonrpc": "2.0",
-  "id": "msg-001",
-  "method": "stream",
-  "params": {
-    "delta": "",
-    "done": true
-  }
-}
-
-// 流式错误
-{
-  "jsonrpc": "2.0",
-  "id": "msg-001",
-  "method": "stream",
-  "params": {
-    "error": "Connection timeout",
-    "done": true
-  }
-}
+  Response (stream=true): text/event-stream
+  → event: text_delta { delta: string, contentIndex: 0 }
+  → event: done { message: AgentMessage }
+  或
+  Response (stream=false): { message: AgentMessage }
 ```
 
-### 3.5 错误码约定
+### 3.5 Skills API
 
-| code | 含义 |
-|------|------|
-| -32600 | Invalid Request（格式错误） |
-| -32601 | Method not found（未知方法） |
-| -32602 | Invalid params（参数无效） |
-| -32603 | Internal error（Agent 内部错误，如 LLM 失败） |
+```
+GET  /skills
+  Headers: Authorization: Bearer <token>
+  Returns: [{ id, name, description, version, author }]
+
+GET  /skills/:id
+  Headers: Authorization: Bearer <token>
+  Returns: { id, name, description, manifest: SkillManifest }
+
+POST /skills/:id/enable
+  Headers: Authorization: Bearer <token>
+  Body:   { appId?: string }
+  Returns: { ok: true }
+
+POST /skills/:id/disable
+  Headers: Authorization: Bearer <token>
+  Returns: { ok: true }
+```
+
+### 3.6 Memory API
+
+```
+GET  /memory?query=...&limit=5
+  Headers: Authorization: Bearer <token>
+  Returns: [{ id, content, timestamp, score }]
+
+POST /memory
+  Headers: Authorization: Bearer <token>
+  Body:   { query?: string, content: string }
+  Returns: { id: string }
+
+DELETE /memory/:id
+  Headers: Authorization: Bearer <token>
+  Returns: { ok: true }
+```
+
+### 3.7 错误码约定
+
+| HTTP Status | 含义 |
+|-------------|------|
+| 400 | Bad Request（参数格式错误） |
+| 401 | Unauthorized（未登录或 Token 无效） |
+| 403 | Forbidden（权限不足） |
+| 404 | Not Found（资源不存在） |
+| 500 | Internal Server Error（Agent/LLM 失败） |
 
 ---
 
@@ -319,24 +320,123 @@ interface Request {
 
 ```
 desktopwork/
-├── desktop-agent/           ← Agent 核心（Node.js）
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-│       ├── index.ts          # 入口：stdio IPC 主循环
-│       ├── ipc.ts           # JSON-RPC 编解码
-│       ├── agent.ts          # agent-loop 封装
-│       ├── session.ts        # Session 管理（JSONL 持久化）
-│       ├── memory.ts         # memory 集成（session 持久化 + memory prompt 构建）
-│       ├── skills.ts         # skills 加载
-│       ├── llm.ts           # LLM 模型解析
-│       └── types.ts         # 类型定义
-├── src-tauri/               ← Tauri 后端
+├── server/                      <- Node HTTP Server (core)
 │   ├── src/
-│   │   ├── lib.rs          # 进程管理、IPC 读写
-│   │   └── main.rs
+│   │   ├── index.ts            # entry: start HTTP server
+│   │   ├── auth.ts             # auth (stub, OIDC later)
+│   │   ├── config.ts           # config management
+│   │   ├── agent.ts            # Agent Chat (streaming LLM)
+│   │   ├── skills.ts           # Skills (复用 agent-core)
+│   │   ├── memory.ts           # Memory (复用 memory-host-sdk)
+│   │   └── router.ts           # HTTP route aggregation
+│   ├── apps/                   # HTML App collection
+│   │   ├── _shared/           # shared (auth, config, styles)
+│   │   ├── dashboard/          # dashboard App
+│   │   │   └── index.html
+│   │   ├── chat/               # chat App
+│   │   │   └── index.html
+│   │   └── settings/           # settings App
+│   │       └── index.html
+│   ├── vendor/bundles/         # OpenClaw Bundles
+│   │   ├── llm-core.esm.js
+│   │   ├── agent-core.esm.js
+│   │   ├── memory-host-sdk.esm.js
+│   │   └── OPENCLAW_VERSIONS.json
+│   └── package.json
+├── shell/                      <- Tauri Shell (wrapper)
+│   ├── src-tauri/             # Rust code
+│   │   └── src/
+│   │       ├── main.rs       # entry: start Node + window
+│   │       ├── menu.rs         # menu management
+│   │       └── ipc.rs          # Tauri IPC (window control)
 │   └── tauri.conf.json
-└── src/                     ← React 前端
+└── scripts/
+    └── extract-openclaw.mjs    # extract OpenClaw bundles script
+```
+
+### 4.2 模块详解
+
+#### agent.ts — Agent Chat + buildStreamFn（协议适配层）
+
+核心职责：串联 agentLoop + buildStreamFn + LLM API。
+
+**buildStreamFn 协议自适应逻辑：**
+
+```typescript
+function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
+  return async function streamSimple(
+    model: any,
+    messages: any[],
+    options: any,
+    signal: AbortSignal
+  ): Promise<EventStream> {
+    // 1. 自动检测 baseurl 是否带 /v1 后缀
+    const normalizedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : baseUrl + '/v1';
+    const endpoint = normalizedBaseUrl + '/chat/completions';
+
+    // 2. 检测协议类型（OpenAI vs Anthropic）
+    // OpenAI: choice.delta.content -> text_delta
+    // Anthropic: choice.delta.delta.text -> text_delta
+    // 两者都通过 finish_reason 触发 done
+    // 实际通过响应结构自动判断
+    const stream = new EventStream(isComplete, extractResult);
+
+    // 3. SSE 解析：content_block_delta -> text_delta
+    // finish_reason -> done
+    //    两者可能在同一 chunk 中（先处理 delta，再处理 done）
+    // 4. 返回 EventStream 给 agentLoop 消费
+  };
+}
+```
+
+**协议检测关键点：**
+- OpenAI: choice.delta.content -> text_delta, choice.finish_reason -> done
+- Anthropic: choice.delta.delta.text -> text_delta, choice.finish_reason -> done
+- 两者 finish_reason 可能与最后一个 content_block_delta 在同一 SSE chunk 中
+  -> 必须先处理 content_block_delta，再处理 finish_reason
+
+**baseurl 自动适配：**
+- 输入 https://api.example.com/v1 -> 直接使用
+- 输入 https://api.example.com -> 自动追加 /v1
+
+#### session.ts — Session 管理
+
+职责：JSONL 文件读写，Agent 消息持久化。
+
+```typescript
+import { JsonlSessionStorage } from '../vendor/bundles/agent-core.esm.js';
+
+const nodeFs = {
+  async readTextFile(path) { return { ok: true, value: readFileSync(path, 'utf-8') }; },
+  async writeFile(path, content) { writeFileSync(path, content, 'utf-8'); return { ok: true }; },
+};
+
+export async function createSessionStore(dataDir: string) {
+  const sessionsPath = join(dataDir, 'sessions');
+  return {
+    async getMessages(sessionKey: string) { ... },
+    async appendMessage(sessionKey: string, msg: AgentMessage) { ... },
+  };
+}
+```
+
+#### skills.ts — Skills 加载（复用 agent-core）
+
+```typescript
+import { loadSkills } from '../vendor/bundles/agent-core.esm.js';
+
+const nodeFs = {
+  async readTextFile(path) { ... },
+  async readDir(path) { ... },
+  async fileInfo(path) { ... },
+  async joinPath(parts) { ... },
+  async absolutePath(p) { ... }
+};
+
+export async function loadUserSkills(skillsDirs: string[]) {
+  const result = await loadSkills(nodeFs, skillsDirs);
+  return { skills: result.skills, diagnostics: result.diagnostics };
+}
 ```
 
 ### 4.2 模块详解
@@ -547,94 +647,69 @@ await startIpcLoop((req, writeStream) => handleRequest(agent, req, writeStream))
 
 ---
 
-## 5. Rust 侧设计
+## 5. Tauri Shell 设计
 
-### 5.1 Tauri Commands
+### 5.1 职责（极简）
 
-| Command | 说明 |
-|---------|------|
-| `agent_start` | 启动 desktop-agent 进程 |
-| `agent_stop` | 停止 desktop-agent |
-| `agent_status` | 查询状态（running/stopped/error） |
-| `chat_send` | 发送消息，返回流式响应 |
-| `config_read` | 读取 openclaw.json |
-| `config_write` | 写入 openclaw.json |
-| `config_patch` | 局部更新配置 |
+Shell 只做五件事，不写任何业务逻辑：
 
-### 5.2 进程管理
+| 职责 | 说明 |
+|------|------|
+| **起 Node 子进程** | 启动 node server/src/index.ts，管理进程生命周期 |
+| **验证 Node 服务健康** | 轮询 /auth/me，确认服务 ready 后创建窗口 |
+| **创建窗口加载 WebView** | 窗口加载 http://localhost:PORT |
+| **菜单管理** | 从 Node /config 获取菜单结构，渲染为原生菜单或 HTML 侧边栏 |
+| **窗口控制** | 最小化、最大化、关闭 |
+| **打包** | .exe / .dmg / .AppImage |
+
+### 5.2 不做
+
+- **不写业务逻辑** — Auth、Config、Agent 全部在 Node 层
+- **不处理 IPC** — 不需要 Rust <-> Node 通信
+- **不编译 Rust 业务代码** — Rust 只做窗口管理和进程启动
+
+### 5.3 Node 进程管理
 
 ```rust
-fn spawn_desktop_agent(agent_path: &str) -> tokio::process::Child {
-    let mut cmd = Command::new("node");
-    cmd.arg(agent_path);
-    cmd.stdin(Stdio::piped());
-    cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::piped());
-    cmd.current_dir(Path::new(agent_path).parent().unwrap());
-    cmd
+fn main() {
+    let port = find_available_port(3737);
+    let node_child = Command::new("node")
+        .args(["server/src/index.ts", "--port", &port.to_string()])
+        .spawn()
+        .expect("Failed to start node server");
+
+    // 等待 Node 服务 ready
+    wait_for_url(&format!("http://localhost:{port}/auth/me"));
+
+    // 创建窗口
+    let window = tauri::Builder::default()
+        .create_window(
+            &format!("http://localhost:{port}"),
+            "DesktopWork",
+            tauri::Size::Physical(1200, 800)
+        )
+        .run();
+
+    // 清理
+    node_child.kill().ok();
 }
 ```
 
-### 5.3 IPC 读写循环
+### 5.4 菜单配置
 
-```rust
-async fn read_agent_output(stdout: tokio::process::ChildStdout, tx: mpsc::Sender<String>) {
-    let mut reader = BufReader::new(stdout);
-    let mut line = String::new();
-    loop {
-        line.clear();
-        match reader.read_line(&mut line).await {
-            Ok(0) => break,
-            Ok(_) => {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    tx.send(trimmed.to_string()).await;
-                }
-            }
-            Err(_) => break,
-        }
-    }
+菜单结构从 Node /config 获取，由 Node 层管理：
+
+```json
+{
+  "menu": [
+    { "id": "dashboard", "label": "主面板", "icon": "home", "appId": "dashboard" },
+    { "id": "chat",      "label": "对话",   "icon": "chat", "appId": "chat" },
+    { "id": "settings",  "label": "设置",   "icon": "gear", "appId": "settings" }
+  ]
 }
 ```
 
-### 5.4 chat_send 实现
-
-```rust
-#[tauri::command]
-async fn chat_send(
-    state: State<'_, Arc<AgentState>>,
-    message: String,
-    session_key: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let session_key = session_key.unwrap_or_else(|| "desktop:main".to_string());
-    let (stream_tx, stream_rx) = mpsc::channel(100);
-
-    // 写入 stdin
-    let req = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": uuid::Uuid::new_v4().to_string(),
-        "method": "chat",
-        "params": { "message": message, "sessionKey": session_key }
-    });
-    state.stdin.write().await
-        .write_all(format!("{}\n", req).as_bytes()).await
-        .map_err(|e| e.to_string())?;
-
-    // 收集流式响应
-    let mut full_text = String::new();
-    while let Some(line) = stream_rx.recv().await {
-        if let Ok(evt) = serde_json::from_str::<serde_json::Value>(&line) {
-            if let Some(delta) = evt.pointer("/params/delta") {
-                full_text.push_str(delta.as_str().unwrap_or(""));
-            }
-        }
-    }
-
-    Ok(serde_json::json!({ "text": full_text }))
-}
-```
-
----
+Shell 通过 HTTP 请求获取菜单，渲染为原生菜单或 HTML 侧边栏。
 
 ## 6. 前端设计
 

@@ -489,34 +489,34 @@ pnpm build  # → 调用 server build + shell build
 
 ---
 
-## 10. 里程碑
+## 10. 里程碑（执行对照表）
 
 ### M1：Node HTTP 服务可独立运行
-- [x] Auth Stub（任意密码登录）← **更新**
-- [ ] Config（读/写）
-- [ ] Agent Chat（流式对话，复用 agent-core + buildStreamFn）
-- [ ] Skills 加载（复用 agent-core.loadSkills）
-- [ ] Memory 读写（复用 memory-host-sdk）
-- 验证：curl 测试所有 API + 浏览器访问 HTML App
+- [ ] M1.1 目录结构（server/ + package.json）
+- [ ] M1.2 Auth Stub（任意密码登录）
+- [ ] M1.3 Config（读/写 JSON 配置）
+- [ ] M1.4 Agent Chat（buildStreamFn + agent-loop）
+- [ ] M1.5 Skills 薄包装（复用 agent-core.loadSkills）
+- [ ] M1.6 验证标准（curl + 浏览器）
 
 ### M2：HTML App 集成
-- [ ] dashboard App
-- [ ] chat App（调用 /agent/chat）
-- [ ] settings App（修改配置、启停 Skills）
-- 验证：浏览器访问各 App，window.* API 正常工作
+- [ ] M2.1 共享资源（window.auth / window.config / styles）
+- [ ] M2.2 dashboard App
+- [ ] M2.3 chat App（流式对话）
+- [ ] M2.4 settings App（配置 + Skills）
+- [ ] M2.5 验证标准
 
 ### M3：Tauri Shell
-- [ ] 起 Node 子进程
-- [ ] 创建窗口加载 WebView
-- [ ] 菜单管理
-- 验证：`cargo run` 启动完整 App
+- [ ] M3.1 Node 进程管理（Rust）
+- [ ] M3.2 菜单管理
+- [ ] M3.3 窗口控制
+- [ ] M3.4 验证标准
 
 ### M4：打包发布
 - [ ] Windows .exe 打包
 - [ ] macOS .dmg 打包（可选）
-- 验证：双击运行，无需命令行
+- [ ] 端到端验证
 
----
 
 ## 11. 技术选型
 

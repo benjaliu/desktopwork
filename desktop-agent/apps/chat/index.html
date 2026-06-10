@@ -116,9 +116,12 @@
             },
           });
         } catch (e) {
+          // Only catches reader stream errors; HTTP errors go through onError
           bubble.querySelector('.cursor')?.remove();
-          bubble.querySelector('.bubble-text').textContent = `Error: ${e.message}`;
-          setInputEnabled(true);
+          if (!bubble.querySelector('.bubble-text').textContent.startsWith('Error:')) {
+            bubble.querySelector('.bubble-text').textContent = `Error: ${e.message}`;
+            setInputEnabled(true);
+          }
         }
       }
 

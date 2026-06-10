@@ -1,8 +1,6 @@
 // window.agent — injected by Node HTTP Server
 const agent = {
-  _token: null,
-
-  _getHeaders() {
+    _getHeaders() {
     const token = window.auth?.getToken();
     return token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
   },
@@ -35,7 +33,27 @@ const agent = {
     try {
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          // Drain any remaining complete lines before exiting
+          for (const line of buffer.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            const data = trimmed.slice(6).trim();
+            if (data === '') continue;
+            try {
+              const event = JSON.parse(data);
+              if (event.type === 'text_delta') {
+                fullText += event.delta;
+                onDelta?.(event.delta);
+              } else if (event.type === 'message_end') {
+                onEnd?.(fullText);
+              } else if (event.type === 'error') {
+                onError?.(event.error);
+              }
+            } catch { /* skip malformed */ }
+          }
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');

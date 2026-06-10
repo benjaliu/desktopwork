@@ -104,10 +104,12 @@ jobs:
 
       - name: Copy server bundle
         run: |
-          mkdir -p shell/src-tauri/server
-          cp -R desktop-agent/dist shell/src-tauri/server/dist
-          cp -R desktop-agent/vendor/bundles shell/src-tauri/server/vendor/bundles
-          cp -R desktop-agent/node_modules shell/src-tauri/server/node_modules
+          mkdir -p shell/src-tauri/server/dist
+          mkdir -p shell/src-tauri/server/vendor/bundles
+          mkdir -p shell/src-tauri/server/node_modules
+          cp -R desktop-agent/dist/* shell/src-tauri/server/dist/
+          cp -R desktop-agent/vendor/bundles/* shell/src-tauri/server/vendor/bundles/
+          cp -R desktop-agent/node_modules/* shell/src-tauri/server/node_modules/
         working-directory: .
 
       - name: Build Tauri (macOS)

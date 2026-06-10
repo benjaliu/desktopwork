@@ -434,26 +434,31 @@ export async function loadUserSkills(skillsDirs: string[]) {
 
 ### 4.2 模块详解
 
-#### `ipc.ts` — JSON-RPC 编解码
+#### `router.ts` — HTTP Route 聚合
 
 职责：
-- 读 `stdin` 逐行解析 JSON-RPC 请求
-- 写 `stdout` 发送响应和流式事件
-- 处理 parse error，返回 error response
+- 聚合所有 HTTP 路由（Auth + Config + Agent + Skills）
+- 中间件：JWT 验证、CORS、错误处理
+- 静态文件： serving HTML Apps
 
 ```typescript
-export async function startIpcLoop(agent: Agent) {
-  const stdin = readline.createInterface({ input: process.stdin });
-  for await (const line of stdin) {
-    if (!line.trim()) continue;
-    try {
-      const req = JSON.parse(line) as Request;
-      const response = await handleRequest(agent, req);
-      console.log(JSON.stringify(response));
-    } catch (e) {
-      console.log(JSON.stringify(errorResponse(null, -32600, String(e))));
-    }
-  }
+import express from 'express';
+import { authRouter } from './auth.js';
+import { configRouter } from './config.js';
+import { agentRouter } from './agent.js';
+import { skillsRouter } from './skills.js';
+
+export function createRouter() {
+  const app = express();
+  app.use(express.json());
+  app.use(cors());
+  app.use('/auth', authRouter);
+  app.use('/config', configRouter);
+  app.use('/agent', agentRouter);
+  app.use('/skills', skillsRouter);
+  // HTML Apps
+  app.use(express.static('apps'));
+  return app;
 }
 ```
 
@@ -598,47 +603,41 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
 }
 ```
 
-#### `index.ts` — 入口 / Stdio Main Loop
+#### `index.ts` — HTTP Server 入口
 
 ```typescript
-// LLM config 从 ~/.openclaw/openclaw.json 读取（内部调用 loadLLMConfig()）
-// skills 在启动时加载
-const dataDir = resolveDataDir();
+import express from 'express';
+import { createRouter } from './router.js';
 
-const agent = await createAgent({
-  dataDir,
-  skillsDirs: [join(dataDir, 'skills')],
+const PORT = parseInt(process.env.PORT || '3737');
+const app = createRouter();
+
+app.listen(PORT, () => {
+  console.log(`DesktopWork Node HTTP Server running on port ${PORT}`);
 });
-
-await startIpcLoop((req, writeStream) => handleRequest(agent, req, writeStream));
 ```
 
-### 4.3 chat 请求处理流程
+### 4.3 HTTP API 请求处理流程
 
 ```
-1. ipc.ts 收到 stdin 请求:
-   { "method": "chat", "params": { "message": "...", "sessionKey": "..." } }
+1. HTTP POST /agent/chat
+   { "message": "...", "sessionKey": "...", "stream": true }
 
-2. 调用 agent.chat(message, sessionKey, onDelta)
+2. Express router 解析请求，JWT 验证
+
+3. agent.ts 调用 agentLoop
    - session.ts 从 JSONL 加载历史消息
-   - agent-loop 调用 LLM
-   - 每个 delta 通过 onDelta 回调实时输出到 stdout
+   - agent-loop 调用 LLM（buildStreamFn 处理协议差异）
+   - 每个 delta 通过 SSE 实时推送
 
-3. 每个 token 通过 stdout 输出:
-   { "method": "stream", "params": { "delta": "token", "done": false } }
+4. SSE 流式输出:
+   data: {"type":"text_delta","delta":"token"}
 
-4. 流结束时:
-   { "method": "stream", "params": { "delta": "", "done": true } }
-
-5. 最终响应:
-   { "result": { "text": "完整回复", "sessionKey": "..." } }
+5. 流结束时:
+   data: {"type":"message_end","message":{...}}
 
 6. session.ts 追加 user message + assistant message 到 JSONL
 ```
-
-> ⚠️ **streaming delta 实现状态**：当前 `index.ts` 的 `chat` handler 只发送 `done: true` 事件，token delta 在内部累积后通过最终响应返回。需要在 `agent.chat()` 增加 `onDelta` 回调参数（Phase 3 收尾）。
-
----
 
 ## 5. Tauri Shell 设计
 

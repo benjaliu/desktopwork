@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard — DesktopWork</title>
+  <link rel="stylesheet" href="/_shared/styles.css">
+  <style>
+    .welcome { font-size: 24px; color: #fff; margin-bottom: 8px; }
+    .welcome sub { font-size: 14px; color: #666; font-weight: normal; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }
+    .stat-card { background: #111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px; }
+    .stat-card .value { font-size: 28px; font-weight: 600; color: #fff; }
+    .stat-card .label { font-size: 13px; color: #888; margin-top: 4px; }
+    .quick-actions { margin-top: 20px; }
+    .quick-actions h3 { font-size: 14px; color: #888; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+    .quick-actions .action-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+    .action-card { background: #111; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; cursor: pointer; transition: border-color 0.15s, background 0.15s; text-decoration: none; color: inherit; }
+    .action-card:hover { border-color: #3b82f6; background: #1a1a2a; }
+    .action-card .icon { font-size: 24px; margin-bottom: 8px; }
+    .action-card .title { font-size: 14px; color: #fff; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div class="logo">DesktopWork</div>
+      <nav>
+        <a href="/" class="active">Dashboard</a>
+        <a href="/chat">Chat</a>
+        <a href="/settings">Settings</a>
+      </nav>
+      <div class="status">
+        <span class="dot"></span>Ready
+      </div>
+    </div>
+    <div id="main">
+      <div class="welcome">
+        Welcome, <span id="user-name">...</span>
+        <sub id="user-role"></sub>
+      </div>
+
+      <div class="stats">
+        <div class="stat-card">
+          <div class="value" id="stat-sessions">—</div>
+          <div class="label">Sessions</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-skills">—</div>
+          <div class="label">Skills Loaded</div>
+        </div>
+        <div class="stat-card">
+          <div class="value" id="stat-model">—</div>
+          <div class="label">Model</div>
+        </div>
+      </div>
+
+      <div class="quick-actions">
+        <h3>Quick Actions</h3>
+        <div class="action-grid">
+          <a href="/chat" class="action-card">
+            <div class="icon">💬</div>
+            <div class="title">New Chat</div>
+          </a>
+          <a href="/settings" class="action-card">
+            <div class="icon">⚙️</div>
+            <div class="title">Settings</div>
+          </a>
+         <div class="action-card" onclick="alert('Memory page coming soon')">
+            <div class="icon">🧠</div>
+            <div class="title">Memory</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/_shared/auth.js"></script>
+  <script src="/_shared/config.js"></script>
+  <script>
+    async function init() {
+      const user = await auth.getUser();
+      if (!user) { window.location.href = '/auth/login.html'; return; }
+
+      document.getElementById('user-name').textContent = user.name || user.username || 'User';
+      document.getElementById('user-role').textContent = user.role || '';
+
+      try {
+        const cfg = await config.getAgent();
+        document.getElementById('stat-model').textContent = cfg.model || '—';
+      } catch { /* ignore */ }
+
+      try {
+        const res = await fetch('/skills', { headers: { Authorization: `Bearer ${auth.getToken()}` } });
+        if (res.ok) {
+          const data = await res.json();
+          document.getElementById('stat-skills').textContent = data.skills?.length ??0;
+        }
+      } catch { /* ignore */ }
+
+      // Count sessions by checking localStorage (simplified)
+      document.getElementById('stat-sessions').textContent = '1';
+    }
+    init();
+  </script>
+</body>
+</html>

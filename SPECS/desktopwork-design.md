@@ -492,12 +492,12 @@ pnpm build  # → 调用 server build + shell build
 ## 10. 里程碑（执行对照表）
 
 ### M1：Node HTTP 服务可独立运行
-- [ ] M1.1 目录结构（desktop-agent/ + package.json）
-- [ ] M1.2 Auth Stub（任意密码登录）
-- [ ] M1.3 Config（读/写 JSON 配置）
-- [ ] M1.4 Agent Chat（buildStreamFn + agent-loop）
-- [ ] M1.5 Skills 薄包装（复用 agent-core.loadSkills）
-- [ ] M1.6 验证标准（curl + 浏览器）
+- [x] M1.1 目录结构（desktop-agent/ + package.json）
+- [x] M1.2 Auth Stub（任意密码登录）
+- [x] M1.3 Config（读/写 JSON 配置）
+- [x] M1.4 Agent Chat（buildStreamFn + agent-loop）
+- [x] M1.5 Skills 薄包装（复用 agent-core.loadSkills）
+- [x] M1.6 验证标准（curl + 浏览器）
 
 ### M2：HTML App 集成
 - [ ] M2.1 共享资源（window.auth / window.config / styles）

@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings — DesktopWork</title>
+  <link rel="stylesheet" href="/_shared/styles.css">
+  <style>
+    .settings-section { margin-bottom: 32px; }
+    .settings-section h3 { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
+    .save-status { font-size: 13px; color: #22c55e; margin-top: 8px; display: none; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div class="logo">DesktopWork</div>
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/chat">Chat</a>
+        <a href="/settings" class="active">Settings</a>
+      </nav>
+      <div class="status"><span class="dot"></span>Ready</div>
+    </div>
+    <div id="main">
+      <div class="card">
+        <h2>LLM Configuration</h2>
+        <form id="agent-form">
+          <div class="form-group">
+            <label>Provider</label>
+            <select id="cfg-provider">
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="ollama">Ollama</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Model</label>
+            <input id="cfg-model" type="text" placeholder="e.g. gpt-4o">
+          </div>
+          <div class="form-group">
+            <label>API Key</label>
+            <input id="cfg-apiKey" type="password" placeholder="sk-...">
+          </div>
+          <div class="form-group">
+            <label>Base URL</label>
+            <input id="cfg-baseUrl" type="text" placeholder="https://api.openai.com/v1">
+          </div>
+          <button type="submit" class="btn btn-primary">Save Changes</button>
+          <div class="save-status" id="save-status">✓ Saved</div>
+        </form>
+      </div>
+
+      <div class="card">
+        <h2>Skills</h2>
+        <div id="skills-list">Loading...</div>
+      </div>
+
+      <div class="card">
+        <h2>Account</h2>
+        <button class="btn btn-secondary" id="logout-btn">Logout</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/_shared/auth.js"></script>
+  <script src="/_shared/config.js"></script>
+  <script>
+    async function init() {
+      if (!auth.getToken()) { window.location.href = '/auth/login.html'; return; }
+
+      // Load agent config
+      try {
+        const cfg = await config.getAgent();
+        document.getElementById('cfg-provider').value = cfg.provider || 'openai';
+        document.getElementById('cfg-model').value = cfg.model || '';
+        document.getElementById('cfg-apiKey').value = cfg.apiKey || '';
+        document.getElementById('cfg-baseUrl').value = cfg.baseUrl || '';
+      } catch (e) {
+        console.error('Failed to load config:', e);
+      }
+
+      // Save agent config
+      document.getElementById('agent-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const patch = {
+          provider: document.getElementById('cfg-provider').value,
+          model: document.getElementById('cfg-model').value,
+          apiKey: document.getElementById('cfg-apiKey').value,
+          baseUrl: document.getElementById('cfg-baseUrl').value,
+        };
+        try {
+          await config.patchAgent(patch);
+          const statusEl = document.getElementById('save-status');
+          statusEl.style.display = 'block';
+          setTimeout(() => statusEl.style.display = 'none', 2000);
+        } catch (err) {
+          alert('Failed to save: ' + err.message);
+        }
+      });
+
+      // Load skills
+      try {
+        const res = await fetch('/skills', { headers: { Authorization: `Bearer ${auth.getToken()}` } });
+        if (res.ok) {
+          const data = await res.json();
+          const list = document.getElementById('skills-list');
+          if (!data.skills || data.skills.length === 0) {
+            list.innerHTML = '<p style="color:#888;font-size:14px;">No skills loaded.</p>';
+          } else {
+            list.innerHTML = data.skills.map(s => `
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #2a2a2a;">
+                <div>
+                  <div style="color:#fff;font-size:14px;">${s.name || s.id}</div>
+                  <div style="color:#666;font-size:12px;">${s.id}</div>
+                </div>
+                <div style="color:${s.enabled !== false ? '#22c55e' : '#888'};font-size:12px;">${s.enabled !== false ? 'Enabled' : 'Disabled'}</div>
+              </div>
+            `).join('');
+          }
+        }
+      } catch (e) {
+        document.getElementById('skills-list').textContent = 'Failed to load skills.';
+      }
+
+      // Logout
+      document.getElementById('logout-btn').addEventListener('click', async () => {
+        await auth.logout();
+        window.location.href = '/auth/login.html';
+      });
+    }
+
+    init();
+  </script>
+</body>
+</html>

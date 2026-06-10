@@ -1028,43 +1028,43 @@ pnpm tauri build
 > 目标：Tauri 启动前，Node 服务可以独立运行、测试
 
 #### M1.1 目录结构
-- [ ] 创建 desktop-agent/ 目录
-- [ ] desktop-agent/package.json（express + TypeScript）
-- [ ] desktop-agent/src/index.ts — HTTP server 入口（3737 端口）
+- [x] 创建 desktop-agent/ 目录
+- [x] desktop-agent/package.json（express + TypeScript）
+- [x] desktop-agent/src/index.ts — HTTP server 入口（3737 端口）
 
 #### M1.2 Auth Stub
-- [ ] desktop-agent/src/auth.ts — Stub 实现（任意密码登录）
-- [ ] POST /auth/login
-- [ ] GET /auth/me
-- [ ] POST /auth/logout
-- [ ] JWT 生成（jsonwebtoken，临时固定密钥）
+- [x] desktop-agent/src/auth.ts — Stub 实现（任意密码登录）
+- [x] POST /auth/login
+- [x] GET /auth/me
+- [x] POST /auth/logout
+- [x] JWT 生成（jsonwebtoken，临时固定密钥）
 
 #### M1.3 Config
-- [ ] desktop-agent/src/config.ts
-- [ ] 配置文件：~/.config/desktopwork/config.json
-- [ ] GET /config
-- [ ] GET/PATCH /config/apps/:appId
-- [ ] GET/PATCH /config/agent
+- [x] desktop-agent/src/config.ts
+- [x] 配置文件：~/.config/desktopwork/config.json
+- [x] GET /config
+- [x] GET/PATCH /config/apps/:appId
+- [x] GET/PATCH /config/agent
 
 #### M1.4 Agent Chat
-- [ ] desktop-agent/src/agent.ts — buildStreamFn（协议适配层）
-- [ ] 支持 OpenAI 协议（baseurl 有无 /v1 自动适配）
-- [ ] 支持 Anthropic 协议自动检测
-- [ ] POST /agent/chat — 流式 SSE + 非流式两种模式
-- [ ] 集成 agent-loop（复用 agent-core bundle）
-- [ ] 集成 loadSkills（复用 agent-core.loadSkills）
+- [x] desktop-agent/src/agent.ts — buildStreamFn（协议适配层）
+- [x] 支持 OpenAI 协议（baseurl 有无 /v1 自动适配）
+- [x] 支持 Anthropic 协议自动检测
+- [x] POST /agent/chat — 流式 SSE + 非流式两种模式
+- [x] 集成 agent-loop（复用 agent-core bundle）
+- [x] 集成 loadSkills（复用 agent-core.loadSkills）
 
 #### M1.5 Skills 薄包装
-- [ ] desktop-agent/src/skills.ts — import agent-core.loadSkills
-- [ ] GET /skills
-- [ ] POST /skills/:id/enable|disable
+- [x] desktop-agent/src/skills.ts — import agent-core.loadSkills
+- [x] GET /skills
+- [x] POST /skills/:id/enable|disable
 
 #### M1.6 验证标准
-- [ ] curl http://localhost:3737/auth/me 返回 401（未登录）
-- [ ] curl -X POST http://localhost:3737/auth/login -d '{"username":"a","password":"b"}' 返回 token
-- [ ] curl http://localhost:3737/config 返回配置
-- [ ] curl -X POST http://localhost:3737/agent/chat -d '{"message":"hi"}' 返回流式响应
-- [ ] 浏览器打开 http://localhost:3737/chat 能看到对话界面
+- [x] curl http://localhost:3737/auth/me 返回 401（未登录）
+- [x] curl -X POST http://localhost:3737/auth/login -d '{"username":"a","password":"b"}' 返回 token
+- [x] curl http://localhost:3737/config 返回配置
+- [x] curl -X POST http://localhost:3737/agent/chat -d '{"message":"hi"}' 返回流式响应
+- [x] 浏览器打开 http://localhost:3737/chat 能看到对话界面
 
 ---
 

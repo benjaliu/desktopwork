@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chat — DesktopWork</title>
+  <link rel="stylesheet" href="/_shared/styles.css">
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <div class="logo">DesktopWork</div>
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/chat" class="active">Chat</a>
+        <a href="/settings">Settings</a>
+      </nav>
+      <div class="status"><span class="dot"></span>Ready</div>
+    </div>
+    <div id="main" style="display:flex;flex-direction:column;">
+      <div id="chat-messages"></div>
+      <div id="chat-input-area">
+        <textarea id="chat-input" placeholder="Type a message..." rows="1"></textarea>
+        <button class="btn btn-primary" id="send-btn">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/_shared/auth.js"></script>
+  <script src="/_shared/config.js"></script>
+  <script>
+    async function init() {
+      if (!auth.getToken()) { window.location.href = '/auth/login.html'; return; }
+
+      const messagesEl = document.getElementById('chat-messages');
+      const inputEl = document.getElementById('chat-input');
+      const sendBtn = document.getElementById('send-btn');
+
+      function addMessage(role, content) {
+        const div = document.createElement('div');
+        div.className = `message ${role}`;
+        div.innerHTML = `
+          <div class="avatar">${role === 'user' ? '👤' : '🤖'}</div>
+          <div class="bubble">${escapeHtml(content)}</div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function escapeHtml(text) {
+        return String(text)
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;');
+      }
+
+      async function sendMessage() {
+        const message = inputEl.value.trim();
+        if (!message) return;
+        inputEl.value = '';
+        addMessage('user', message);
+        sendBtn.disabled = true;
+
+        try {
+          const res = await fetch('/agent/chat', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${auth.getToken()}`,
+            },
+            body: JSON.stringify({ message, stream: false }),
+          });
+
+          if (!res.ok) {
+            const err = await res.json();
+            addMessage('assistant', `Error: ${err.error || res.statusText}`);
+            return;
+          }
+
+          const data = await res.json();
+          addMessage('assistant', data.text || '(empty response)');
+        } catch (e) {
+          addMessage('assistant', `Network error: ${e.message}`);
+        } finally {
+          sendBtn.disabled = false;
+        }
+      }
+
+      sendBtn.addEventListener('click', sendMessage);
+      inputEl.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+
+      // Auto-focus
+      inputEl.focus();
+    }
+
+    init();
+  </script>
+</body>
+</html>

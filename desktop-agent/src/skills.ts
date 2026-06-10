@@ -1,87 +1,64 @@
-import { loadSkills } from '../vendor/bundles/agent-core.esm.js';
+import { Router } from 'express';
+import { readdir, readFile } from 'fs/promises';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
-interface SkillDiagnostic {
-  type: string;
-  message: string;
-}
+const router = Router();
 
-interface Skill {
-  name: string;
-  description: string;
-}
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const BUNDLES_DIR = join(__dirname, '..', 'vendor', 'bundles');
 
-interface LoadSkillsResult {
-  skills: Skill[];
-  diagnostics: SkillDiagnostic[];
-}
+let skillsCache: any[] = [];
+let skillsLoaded = false;
 
-// Node.js fs abstraction matching agent-core expectations
-const nodeFs = {
-  async readTextFile(path: string): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }> {
-    try {
-      const { readFileSync } = require('node:fs');
-      return { ok: true, value: readFileSync(path, 'utf-8') };
-    } catch (e: any) {
-      if (e.code === 'ENOENT') return { ok: false, error: { code: 'not_found', message: e.message } };
-      return { ok: false, error: { code: 'read_error', message: e.message } };
-    }
-  },
-
-  async readDir(path: string): Promise<{ ok: true; value: string[] } | { ok: false; error: { code: string; message: string } }> {
-    try {
-      const { readdirSync } = require('node:fs');
-      return { ok: true, value: readdirSync(path) };
-    } catch (e: any) {
-      return { ok: false, error: { code: 'read_dir_error', message: e.message } };
-    }
-  },
-
-  async absolutePath(p: string): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }> {
-    return { ok: true, value: p };
-  },
-
-  async joinPath(parts: string[]): Promise<{ ok: true; value: string } | { ok: false; error: { code: string; message: string } }> {
-    return { ok: true, value: require('node:path').join(...parts) };
-  },
-
-  async fileInfo(p: string): Promise<{ ok: true; value: { isFile: boolean; isDir: boolean; size: number; mtimeMs: number } } | { ok: false; error: { code: string; message: string } }> {
-    try {
-      const { statSync } = require('node:fs');
-      const s = statSync(p);
-      return { ok: true, value: { isFile: s.isFile(), isDir: s.isDirectory(), size: s.size, mtimeMs: s.mtimeMs } };
-    } catch (e: any) {
-      if (e.code === 'ENOENT') return { ok: false, error: { code: 'not_found', message: e.message } };
-      return { ok: false, error: { code: 'file_info_error', message: e.message } };
-    }
-  }
-};
-
-let cachedSkills: Skill[] = [];
-let cachedDiagnostics: SkillDiagnostic[] = [];
-
-export async function loadUserSkills(skillsDirs: string[]): Promise<LoadSkillsResult> {
-  if (skillsDirs.length === 0) {
-    return { skills: [], diagnostics: [] };
-  }
-
+async function loadSkills(): Promise<any[]> {
+  if (skillsLoaded) return skillsCache;
   try {
-    const result = await loadSkills(nodeFs as any, skillsDirs);
-    cachedSkills = (result.skills || []).map((s: any) => ({
-      name: s.name || '',
-      description: s.description || ''
-    }));
-    cachedDiagnostics = result.diagnostics || [];
-    return { skills: cachedSkills, diagnostics: cachedDiagnostics };
-  } catch (e: any) {
-    console.error('[skills] Failed to load skills:', e.message);
-    return { skills: [], diagnostics: [{ type: 'error', message: e.message }] };
+    const { loadSkills } = await import(`../vendor/bundles/agent-core.esm.js`);
+    const skillsDir = join(process.env.HOME || '', '.config', 'desktopwork', 'skills');
+    const env = {
+      readFile: readFile,
+      readDir: async (dir: string) => {
+        try {
+          const entries = await readdir(dir, { withFileTypes: true });
+          return entries.map((e) => ({ name: e.name, isDirectory: () => e.isDirectory() }));
+        } catch {
+          return [];
+        }
+      },
+    };
+    const { skills } = await loadSkills(env, [skillsDir]);
+    skillsCache = skills || [];
+    skillsLoaded = true;
+    return skillsCache;
+  } catch (e) {
+    console.error('Failed to load skills:', e);
+    return [];
   }
 }
 
-export async function reloadSkills(skillsDirs: string[]): Promise<LoadSkillsResult> {
-  return loadUserSkills(skillsDirs);
-}
+// GET /skills
+router.get('/', async (_req, res) => {
+  const skills = await loadSkills();
+  return res.json({ skills });
+});
 
-export function getCachedSkills(): Skill[] {
-  return cachedSkills;
-}
+// POST /skills/:id/enable
+router.post('/:id/enable', async (req, res) => {
+  const skills = await loadSkills();
+  const skill = skills.find((s: any) => s.id === req.params.id);
+  if (!skill) return res.status(404).json({ error: 'skill not found' });
+  skill.enabled = true;
+  return res.json({ ok: true, skill });
+});
+
+// POST /skills/:id/disable
+router.post('/:id/disable', async (req, res) => {
+  const skills = await loadSkills();
+  const skill = skills.find((s: any) => s.id === req.params.id);
+  if (!skill) return res.status(404).json({ error: 'skill not found' });
+  skill.enabled = false;
+  return res.json({ ok: true, skill });
+});
+
+export default router;

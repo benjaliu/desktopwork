@@ -1064,44 +1064,112 @@ desktop-agent 不使用 pnpm workspace 链接，依赖预编译的 OpenClaw Bund
 
 ---
 
-## 11. 实现步骤
+## 11. 实现步骤（M1 -> M4 执行指导）
 
-### Phase 1：基础设施
+### M1：Node HTTP 服务可独立运行
 
-1. 创建 `desktop-agent/` 目录结构
-2. 配置 `package.json`（依赖 OpenClaw Bundle，不使用 workspace 链接）
-3. 实现 `ipc.ts`（JSON-RPC stdio loop）
-4. 实现 `index.ts`（入口，验证可启动）
+> 目标：Tauri 启动前，Node 服务可以独立运行、测试
 
-### Phase 2：核心功能
+#### M1.1 目录结构
+- [ ] 创建 server/ 目录
+- [ ] server/package.json（express + TypeScript）
+- [ ] server/src/index.ts — HTTP server 入口（3737 端口）
 
-5. 实现 `llm.ts`（配置解析）
-6. 实现 `agent.ts`（agent-loop 封装）
-7. 实现 `session.ts`（JSONL 持久化）
-8. 实现 `chat` 请求处理（单轮对话验证）
+#### M1.2 Auth Stub
+- [ ] server/src/auth.ts — Stub 实现（任意密码登录）
+- [ ] POST /auth/login
+- [ ] GET /auth/me
+- [ ] POST /auth/logout
+- [ ] JWT 生成（jsonwebtoken，临时固定密钥）
 
-### Phase 3：完整功能
+#### M1.3 Config
+- [ ] server/src/config.ts
+- [ ] 配置文件：~/.config/desktopwork/config.json
+- [ ] GET /config
+- [ ] GET/PATCH /config/apps/:appId
+- [ ] GET/PATCH /config/agent
 
-9. 实现 `memory.ts`（session 持久化 + buildActiveMemoryPromptSection）
-10. 实现 `skills.ts`（skills 加载）
-11. 实现流式输出（`stream` 事件）
-12. 实现 `status` / `shutdown` / `reload` 请求
+#### M1.4 Agent Chat
+- [ ] server/src/agent.ts — buildStreamFn（协议适配层）
+- [ ] 支持 OpenAI 协议（baseurl 有无 /v1 自动适配）
+- [ ] 支持 Anthropic 协议自动检测
+- [ ] POST /agent/chat — 流式 SSE + 非流式两种模式
+- [ ] 集成 agent-loop（复用 agent-core bundle）
+- [ ] 集成 loadSkills（复用 agent-core.loadSkills）
 
-### Phase 4：Rust 集成
+#### M1.5 Skills 薄包装
+- [ ] server/src/skills.ts — import agent-core.loadSkills
+- [ ] GET /skills
+- [ ] POST /skills/:id/enable|disable
 
-13. 创建 `src-tauri/src/lib.rs`：实现 `spawn_desktop_agent`
-14. 实现 Rust 侧 IPC 读写循环
-15. 更新 `chat_send` 命令（走 stdin/stdout）
-16. 更新 `agent_start/stop/status` 命令
-17. 新建 React 前端（Chat UI + Settings UI）
+#### M1.6 验证标准
+- [ ] curl http://localhost:3737/auth/me 返回 401（未登录）
+- [ ] curl -X POST http://localhost:3737/auth/login -d '{"username":"a","password":"b"}' 返回 token
+- [ ] curl http://localhost:3737/config 返回配置
+- [ ] curl -X POST http://localhost:3737/agent/chat -d '{"message":"hi"}' 返回流式响应
+- [ ] 浏览器打开 http://localhost:3737/chat 能看到对话界面
 
-### Phase 5：测试与调优
+---
 
-18. 端到端聊天测试
-19. 记忆持久化验证
-20. 配置变更热重载
-21. 内存占用测量
-22. 构建验证（Windows / macOS / Linux）
+### M2：HTML App 集成
+
+> 目标：用户在浏览器里能看到完整的 App 界面，window.* API 正常工作
+
+#### M2.1 共享资源
+- [ ] server/apps/_shared/auth.js — window.auth 注入
+- [ ] server/apps/_shared/config.js — window.config 注入
+- [ ] server/apps/_shared/styles.css — 共享样式
+
+#### M2.2 dashboard App
+- [ ] server/apps/dashboard/index.html — 主面板
+
+#### M2.3 chat App
+- [ ] server/apps/chat/index.html — 对话界面
+- [ ] 调用 window.agent.chat() 流式对话
+- [ ] 显示对话历史
+
+#### M2.4 settings App
+- [ ] server/apps/settings/index.html — 设置界面
+- [ ] 修改 LLM 配置（调用 PATCH /config/agent）
+- [ ] 启停 Skills（调用 POST /skills/:id/enable|disable）
+
+#### M2.5 验证标准
+- [ ] 浏览器打开 http://localhost:3737/ -> dashboard
+- [ ] 浏览器打开 http://localhost:3737/chat -> 对话正常
+- [ ] window.auth.getUser() 能拿到用户信息
+- [ ] window.config.get('chat') 能拿到配置
+
+---
+
+### M3：Tauri Shell
+
+> 目标：cargo run 启动完整桌面 App
+
+#### M3.1 Node 进程管理（Rust）
+- [ ] shell/src-tauri/src/main.rs — 起 Node 子进程
+- [ ] 端口检测（3737 自动检测占用）
+- [ ] 等待 Node ready（轮询 /auth/me）
+- [ ] 创建窗口加载 WebView
+
+#### M3.2 菜单管理
+- [ ] 从 GET /config 获取菜单结构
+- [ ] 渲染为 HTML 侧边栏或原生菜单
+
+#### M3.3 窗口控制
+- [ ] 最小化、最大化、关闭
+
+#### M3.4 验证标准
+- [ ] cargo run 启动 Tauri -> Node 进程 -> 窗口显示 WebView
+- [ ] 点击菜单项能切换 App
+- [ ] 关闭窗口 Node 进程正确退出
+
+---
+
+### M4：打包发布
+
+- [ ] pnpm build -> Windows .exe
+- [ ] 双击运行，无需命令行
+- [ ] 验证所有 M1-M3 功能在打包后正常
 
 ---
 
@@ -1109,9 +1177,10 @@ desktop-agent 不使用 pnpm workspace 链接，依赖预编译的 OpenClaw Bund
 
 | 风险 | 影响 | 应对 |
 |------|------|------|
-| Node.js 进程崩溃 | 聊天不可用 | Rust 监控进程退出，自动重启 |
-| JSONL 会话文件过大 | 读取慢 / 内存高 | 实现 compaction 阈值 |
-| LLM API 错误传播 | 用户看到错误 | IPC 层统一错误码，Rust 转换为友好消息 |
-| 配置文件变更 | Agent 未感知 | `reload` 方法重读配置 |
+| Node.js 进程崩溃 | 聊天不可用 | Tauri 监控 Node 进程退出，自动重启或提示用户 |
+| JSONL 会话文件过大 | 读取慢 / 内存高 | 实现 compaction 阈值（session.ts 层面） |
+| LLM API 错误传播 | 用户看到错误 | HTTP 层统一错误码，返回友好消息 |
+| 配置文件变更后 Agent 未感知 | 配置不生效 | 运行时通过 PATCH /config API 立即生效 |
 | 首次启动 LLM 连接慢 | 用户等待 | Agent 启动时预热 LLM 连接 |
 | Windows Defender 误报 | 用户信任问题 | 代码签名或提供源码说明 |
+| OpenClaw Submodule 未下载 | Bundles 缺失 | Bundles 已提交到 git，服务可独立运行不依赖 submodule |

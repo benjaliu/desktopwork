@@ -33,12 +33,10 @@ jobs:
       # Install shell deps (tauri cli)
       - name: Install shell deps
         run: pnpm install
-        run: pnpm install
         working-directory: shell
 
       # Install desktop-agent deps
       - name: Install desktop-agent deps
-        run: pnpm install
         run: pnpm install
         working-directory: desktop-agent
 
@@ -54,7 +52,7 @@ jobs:
       # At runtime these will be in the same dir as the .exe
       - name: Copy server bundle
         run: |
-          mkdir shell/src-tauri/server
+          mkdir shell\src-tauri\server
           xcopy /E /I /Y desktop-agent\dist shell\src-tauri\server\dist
           xcopy /E /I /Y desktop-agent\vendor\bundles shell\src-tauri\server\vendor\bundles
           xcopy /E /I /Y desktop-agent\node_modules shell\src-tauri\server\node_modules
@@ -92,11 +90,9 @@ jobs:
 
       - name: Install shell deps
         run: pnpm install
-        run: pnpm install
         working-directory: shell
 
       - name: Install desktop-agent deps
-        run: pnpm install
         run: pnpm install
         working-directory: desktop-agent
 

@@ -507,10 +507,10 @@ pnpm build  # → 调用 server build + shell build
 - [ ] M2.5 验证标准
 
 ### M3：Tauri Shell
-- [ ] M3.1 Node 进程管理（Rust）
-- [ ] M3.2 菜单管理
-- [ ] M3.3 窗口控制
-- [ ] M3.4 验证标准
+- [x] M3.1 Node 进程管理（Rust）
+- [x] M3.2 菜单管理
+- [x] M3.3 窗口控制
+- [x] M3.4 验证标准
 
 ### M4：打包发布
 - [ ] Windows .exe 打包

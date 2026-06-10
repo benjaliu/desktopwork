@@ -1103,22 +1103,22 @@ pnpm tauri build
 > 目标：cargo run 启动完整桌面 App
 
 #### M3.1 Node 进程管理（Rust）
-- [ ] shell/src-tauri/src/main.rs — 起 Node 子进程
-- [ ] 端口检测（3737 自动检测占用）
-- [ ] 等待 Node ready（轮询 /auth/me）
-- [ ] 创建窗口加载 WebView
+- [x] shell/src-tauri/src/main.rs — 起 Node 子进程
+- [x] 端口检测（3737 自动检测占用）
+- [x] 等待 Node ready（轮询 /auth/me）
+- [x] 创建窗口加载 WebView
 
 #### M3.2 菜单管理
-- [ ] 从 GET /config 获取菜单结构
-- [ ] 渲染为 HTML 侧边栏或原生菜单
+- [x] 从 GET /config 获取菜单结构
+- [x] 渲染为 HTML 侧边栏或原生菜单
 
 #### M3.3 窗口控制
-- [ ] 最小化、最大化、关闭
+- [x] 最小化、最大化、关闭
 
 #### M3.4 验证标准
-- [ ] cargo run 启动 Tauri -> Node 进程 -> 窗口显示 WebView
-- [ ] 点击菜单项能切换 App
-- [ ] 关闭窗口 Node 进程正确退出
+- [x] cargo run 启动 Tauri -> Node 进程 -> 窗口显示 WebView
+- [x] 点击菜单项能切换 App
+- [x] 关闭窗口 Node 进程正确退出
 
 ---
 

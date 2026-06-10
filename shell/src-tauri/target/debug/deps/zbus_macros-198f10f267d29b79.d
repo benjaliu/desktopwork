@@ -1,0 +1,10 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/zbus_macros-198f10f267d29b79.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/error.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/iface.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/proxy.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/utils.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/../README.md
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libzbus_macros-198f10f267d29b79.so: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/error.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/iface.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/proxy.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/utils.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/../README.md
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/error.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/iface.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/proxy.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/utils.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/zbus_macros-5.16.0/src/../README.md:

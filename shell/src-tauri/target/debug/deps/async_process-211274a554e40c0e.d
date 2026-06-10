@@ -1,0 +1,9 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/async_process-211274a554e40c0e.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/unix.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/mod.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/wait.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/signal.rs
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libasync_process-211274a554e40c0e.rmeta: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/unix.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/mod.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/wait.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/signal.rs
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/unix.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/mod.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/wait.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/async-process-2.5.0/src/reaper/signal.rs:

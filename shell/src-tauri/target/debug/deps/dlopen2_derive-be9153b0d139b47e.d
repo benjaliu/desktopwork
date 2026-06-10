@@ -1,0 +1,9 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/dlopen2_derive-be9153b0d139b47e.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/api.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/common.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/multi_api.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/wrapper.rs
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libdlopen2_derive-be9153b0d139b47e.so: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/api.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/common.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/multi_api.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/wrapper.rs
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/api.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/common.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/multi_api.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/dlopen2_derive-0.4.3/src/wrapper.rs:

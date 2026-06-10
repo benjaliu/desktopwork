@@ -1,0 +1,10 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/env_filter-f15018bbc5aec3cf.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/directive.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/filter.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/filtered_log.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/op.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/parser.rs
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libenv_filter-f15018bbc5aec3cf.rmeta: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/directive.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/filter.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/filtered_log.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/op.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/parser.rs
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/directive.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/filter.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/filtered_log.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/op.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/env_filter-1.0.1/src/parser.rs:

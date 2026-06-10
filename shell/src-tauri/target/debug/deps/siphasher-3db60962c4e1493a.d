@@ -1,0 +1,11 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/siphasher-3db60962c4e1493a.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/common.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip128.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/../README.md
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libsiphasher-3db60962c4e1493a.rlib: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/common.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip128.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/../README.md
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libsiphasher-3db60962c4e1493a.rmeta: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/common.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip128.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/../README.md
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/common.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/sip128.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/siphasher-1.0.3/src/../README.md:

@@ -1,0 +1,10 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/toml_datetime-1aa0d16bb64b9a9b.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/datetime.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/de.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/ser.rs
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libtoml_datetime-1aa0d16bb64b9a9b.rlib: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/datetime.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/de.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/ser.rs
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libtoml_datetime-1aa0d16bb64b9a9b.rmeta: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/datetime.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/de.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/ser.rs
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/datetime.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/de.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/toml_datetime-1.1.1+spec-1.1.0/src/ser.rs:

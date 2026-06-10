@@ -1,0 +1,9 @@
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/concurrent_queue-cc44212863c08383.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/bounded.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/single.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/unbounded.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/sync.rs
+
+/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libconcurrent_queue-cc44212863c08383.rmeta: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/bounded.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/single.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/unbounded.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/sync.rs
+
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/lib.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/bounded.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/single.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/unbounded.rs:
+/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/concurrent-queue-2.5.0/src/sync.rs:

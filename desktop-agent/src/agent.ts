@@ -9,6 +9,20 @@ import type {
 import { loadLLMConfig, resolveModel, type ModelConfig, type LLMCompleteOptions, type LLMResponse } from './llm.js';
 import { createSessionStore, type SessionStore } from './session.js';
 
+// convertToLlm: transform AgentMessage[] to LLM message format
+// This is called by agentLoop internally — must be provided in config.
+function convertToLlm(messages: AgentMessage[]): any[] {
+  return messages.map((m) => {
+    if (m.role === 'user' || m.role === 'assistant') {
+      const content = typeof m.content === 'string'
+        ? m.content
+        : (m.content as any[]).map((c: any) => c.text || '').join('');
+      return { role: m.role, content };
+    }
+    return { role: 'user', content: String(m.content) };
+  });
+}
+
 export interface AgentConfig {
   dataDir: string;
   skillsDirs: string[];
@@ -214,7 +228,8 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
     context: { systemPrompt: string; messages: AgentMessage[] },
     options: LLMCompleteOptions
   ): Promise<EventStream> {
-    console.error('[buildStreamFn] called! apiType:', apiType, 'model:', model.id);
+    console.error('[buildStreamFn] called, apiType:', apiType, 'baseUrl:', baseUrl);
+    try {
     const key = apiKey || options.apiKey || '';
     const headers: Record<string, string> = {
       ...(options.headers || {}),
@@ -248,7 +263,7 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
         requestBody.system = context.systemPrompt;
       }
     } else if (apiType === 'openai-chat') {
-      endpoint = `${baseUrl}/chat/completions`;
+      endpoint = `${baseUrl}/v1/chat/completions`;
       requestBody = {
         model: model.id,
         messages: [
@@ -270,7 +285,7 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
       stream2.push({ type: 'start', partial: { id: '', role: 'assistant', content: result.content, timestamp: Date.now() } });
       for (const block of result.content) {
         if (block.text) {
-          stream2.push({ type: 'text_delta', partial: { id: '', role: 'assistant', content: [{ type: 'text', text: block.text }], timestamp: Date.now() } });
+          stream2.push({ type: 'text_delta', contentIndex: 0, delta: block.text, partial: { id: '', role: 'assistant', content: [{ type: 'text', text: block.text }], timestamp: Date.now() } });
         }
       }
       stream2.push({ type: 'done', message: { id: '', role: 'assistant', content: result.content, timestamp: Date.now(), stopReason: result.stopReason } });
@@ -278,18 +293,23 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
       return stream2;
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: options.signal
-    });
-
-    console.error('[buildStreamFn] response status:', response.status, 'apiType:', apiType);
+    console.error('[buildStreamFn] about to fetch, endpoint:', endpoint, 'body keys:', Object.keys(requestBody));
+    let response;
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: options.signal
+      });
+    } catch(e) {
+      console.error('[buildStreamFn] fetch threw:', e.message);
+      throw e;
+    }
+    console.error('[buildStreamFn] fetch got response status:', response.status);
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('[buildStreamFn] error:', response.status, errorText.slice(0, 200));
       const errorStream = new EventStream(
         (event) => event.type === 'error',
         (event) => ({ errorMessage: event.message || String(event) })
@@ -299,6 +319,7 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
       return errorStream;
     }
 
+    console.error('[buildStreamFn] response.body exists:', !!response.body, 'type:', typeof response.body);
     const stream = new EventStream(
       (event) => event.type === 'done' || event.type === 'error',
       (event) => event.type === 'done' ? event.message : { errorMessage: event.message || String(event) }
@@ -306,6 +327,8 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
 
     // Partial message accumulator for text_delta events
     let partialMessage: any = null;
+    let eventCount = 0;
+    const log = (msg: string) => console.error('[buildStreamFn]', msg);
 
     // Read SSE body
     const reader = response.body!.getReader();
@@ -313,9 +336,10 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
     let buffer = '';
 
     const readChunk = async (): Promise<void> => {
+      console.error('[buildStreamFn] readChunk reading...');
       const { done, value } = await reader.read();
+      console.error('[buildStreamFn] read done=', done, 'valueLen=', value?.length);
       if (done) {
-        // Process any remaining buffer
         if (buffer.trim()) {
           const event = parseSseEvent(buffer);
           if (event) await emitEvent(event);
@@ -328,16 +352,39 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        const event = parseSseLine(line);
-        if (event) await emitEvent(event);
+        const parsed = parseSseLine(line);
+        if (!parsed) continue;
+
+        if (parsed.type === '_done') {
+          // Stream end marker
+          await emitEvent({ type: 'message_stop', data: '' });
+          continue;
+        }
+
+        if (parsed.type === 'data') {
+          // Check if this is OpenAI format (no `event:` prefix) or Anthropic format
+          const eventType = detectOpenAIEventType(parsed.data);
+          if (eventType) {
+            // OpenAI format — data IS the JSON, emit directly
+            await emitOpenAIChunk(parsed.data, eventType);
+          } else {
+            // Anthropic format — buffer contains event type from previous line
+            const event = parseSseEvent(parsed.data);
+            if (event) await emitEvent(event);
+          }
+        }
       }
 
       if (!done) {
-        await readChunk();
+        await readChunk();;
       }
     };
 
+    // Parse OpenAI SSE: `data: {...json...}` or Anthropic: `event: type\ndata: {...}`
     function parseSseLine(line: string): { type: string; data: string } | null {
+      if (line === 'data: [DONE]') {
+        return { type: '_done', data: '' };
+      }
       if (!line.startsWith('event:') && !line.startsWith('data:')) return null;
       const colonIdx = line.indexOf(':');
       if (colonIdx === -1) return null;
@@ -358,8 +405,23 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
       return eventType ? { type: eventType, data: eventData } : null;
     }
 
+    // Detect event type from OpenAI chunk JSON (fallback when no `event:` prefix)
+    function detectOpenAIEventType(data: string): string {
+      try {
+        const obj = JSON.parse(data);
+        const choice = obj.choices?.[0];
+        // Check delta FIRST — content_block_delta may coexist with finish_reason in same chunk
+        if (choice?.delta) {
+          if (choice.delta.content) return 'content_block_delta';
+          if (choice.delta.tool_calls) return 'content_block_delta';
+        }
+        if (choice?.finish_reason) return 'message_stop';
+      } catch {}
+      return '';
+    }
+
+    // Emit event from Anthropic SSE format (event: type\ndata: {...})
     async function emitEvent(event: { type: string; data: string }): Promise<void> {
-      console.error('[buildStreamFn] emitEvent:', event.type, event.data?.slice(0, 100));
       if (event.type === 'message_start') {
         const data = JSON.parse(event.data);
         partialMessage = {
@@ -373,13 +435,11 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
         const data = JSON.parse(event.data);
         if (data.type === 'text_delta') {
           const text = data.text;
-          // Append text block to partial message
           partialMessage.content.push({ type: 'text', text });
-          stream.push({ type: 'text_delta', partial: { ...partialMessage } });
+          stream.push({ type: 'text_delta', contentIndex: 0, delta: text, partial: { ...partialMessage } });
         }
       } else if (event.type === 'message_delta') {
         const data = JSON.parse(event.data);
-        // Update partial message with final delta info
         if (data.usage) {
           partialMessage.usage = data.usage;
         }
@@ -395,7 +455,62 @@ function buildStreamFn(model: ModelConfig, apiType: string, apiKey: string, base
       }
     }
 
+    // Emit event from OpenAI SSE format (data: {...json...} without event: prefix)
+    async function emitOpenAIChunk(dataStr: string, eventType: string): Promise<void> {
+      console.error('[buildStreamFn] emitOpenAIChunk called, eventType:', eventType, 'dataLen:', dataStr.length);
+      try {
+        const obj = JSON.parse(dataStr);
+        const choice = obj.choices?.[0];
+        if (!choice) return;
+
+
+        // Always process content_block_delta FIRST (may coexist with message_stop in same chunk)
+        if (choice.delta?.content) {
+          const text = choice.delta.content;
+          if (!partialMessage) {
+            partialMessage = {
+              id: obj.id || crypto.randomUUID(),
+              role: 'assistant',
+              content: [],
+              timestamp: Date.now()
+            };
+            console.error('[buildStreamFn] PUSHING START, queue len before:', (stream as any).queue.length);
+            stream.push({ type: 'start', partial: partialMessage });
+            console.error('[buildStreamFn] PUSHED START, queue len after:', (stream as any).queue.length);
+          }
+          partialMessage.content.push({ type: 'text', text });
+          stream.push({ type: 'text_delta', contentIndex: 0, delta: text, partial: { ...partialMessage } });
+        } else if (choice.delta?.tool_calls) {
+          for (const tc of choice.delta.tool_calls) {
+            partialMessage.content.push({ type: 'tool_call', id: tc.id, name: tc.name, input: tc.function?.arguments });
+          }
+        }
+        // Then process message_stop (finish_reason) if present — may be in same chunk as content_block_delta
+        if (choice.finish_reason) {
+          partialMessage.stopReason = choice.finish_reason || 'stop';
+          console.error('[buildStreamFn] DONE, partialMessage.content:', JSON.stringify(partialMessage?.content));
+          (stream as any).finalText = partialMessage.content.map((c: any) => c.text || '').join('');
+          stream.push({ type: 'done', message: { ...partialMessage } });
+        }
+      } catch (e) {
+        // Ignore parse errors for non-JSON lines
+      }
+    }
+
     await readChunk();
+    // Do NOT call stream.end() here — the done event is already in the queue.
+    // The for-await loop will drain the queue and exit when it yields the done event.
+    console.error('[buildStreamFn] readChunk done, returning stream, queue len:', (stream as any).queue.length, 'done:', (stream as any).done);
+        } catch(err) {
+      console.error('[buildStreamFn] stream function error:', err.message, err.stack?.split('\n').slice(0,5).join(' | '));
+      const errorStream = new EventStream(
+        (event) => event.type === 'error',
+        (event) => ({ errorMessage: String(event) })
+      );
+      errorStream.push({ type: 'error', message: err.message });
+      errorStream.end();
+      return errorStream;
+    }
     return stream;
   };
 }
@@ -415,29 +530,14 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
   // Build complete function
   const completeFn = buildCompleteFn(model, provider.api, provider.apiKey || '', provider.baseUrl);
   const streamFn = buildStreamFn(model, provider.api, provider.apiKey || '', provider.baseUrl);
-  console.error('[agent] streamFn defined:', typeof streamFn);
 
-  // Wrap streamFn to detect calls
-  const wrappedStreamFn = async function(model: ModelConfig, context: any, options: any) {
-    console.error('[agent] wrappedStreamFn called!');
-    return streamFn(model, context, options);
-  };
+  // Note: streamFn is passed as runtime.streamSimple to the bundle
 
   // Runtime for agent-core
   const runtime = {
     completeSimple: completeFn,
-    streamSimple: wrappedStreamFn
+    streamSimple: streamFn
   };
-  console.error('[agent] runtime.streamSimple:', typeof runtime.streamSimple, '===streamFn:', runtime.streamSimple === streamFn);
-
-  // Proxy to detect streamSimple access
-  const runtimeProxy = new Proxy(runtime, {
-    get(target, prop) {
-      console.error('[agent] runtime proxy get:', String(prop));
-      return target[prop];
-    }
-  });
-  console.error('[agent] runtimeProxy.streamSimple:', typeof runtimeProxy.streamSimple);
 
   function extractText(msg: { content: unknown }): string {
     if (!msg.content) return '';
@@ -467,44 +567,57 @@ export async function createAgent(config: AgentConfig): Promise<Agent> {
     const { agentLoop: loop } = await import('../vendor/bundles/agent-core.esm.js');
 
     // Run agent loop
-    const stream = loop(prompts, context, { model }, null, null, runtimeProxy);
+    // config must have convertToLlm (called by streamAssistantResponse internally)
+    const stream = loop(prompts, context, { model, convertToLlm }, null, null, runtime);
 
     let fullText = '';
     let finalMessages: AgentMessage[] = [];
 
     // Collect stream events via async iterator
     let lastText = '';
-    let eventCount = 0;
     try {
       for await (const event of stream as any) {
-        eventCount++;
-        console.error('[agent] event:', event.type, eventCount);
-        if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
-          const currentText = extractText(event.message);
-          if (currentText.startsWith(lastText)) {
-            const delta = currentText.slice(lastText.length);
-            if (delta) {
-              fullText += delta;
-              onDelta?.(delta);
-              console.error('[agent] delta:', JSON.stringify(delta));
-            }
+        console.error('[agent] stream event:', event.type, 'delta:', event.delta, 'msgtype:', event.message?.content?.[0]?.text ? 'hastext' : 'notext');
+        // Support both OpenAI streaming (text_delta directly) and Anthropic (wrapped in message_update)
+        const isTextDelta = event.type === 'text_delta' || (event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta');
+        if (isTextDelta) {
+          const delta = event.delta || event.assistantMessageEvent?.delta;
+          if (delta) {
+            console.error('[agent] adding delta:', delta.slice(0, 20));
+            fullText += delta;
+            onDelta?.(delta);
           }
-          lastText = currentText;
         }
         if (event.type === 'message_end' && event.message) {
           finalMessages = [event.message as AgentMessage];
-          console.error('[agent] message_end, text:', JSON.stringify(extractText(event.message)));
+          // If fullText is empty (e.g. all content came through done event), extract from message
+          if (!fullText && (event.message as any).content) {
+            const content = (event.message as any).content;
+            if (Array.isArray(content)) {
+              fullText = content.map((c: any) => c.text || '').join('');
+            }
+          }
+        }
+        // Handle done event: extract accumulated text from event.message (partialMessage)
+        if (event.type === 'done' && !fullText) {
+          const msgContent = (event as any).message?.content;
+          if (Array.isArray(msgContent)) {
+            fullText = msgContent.map((c: any) => c.text || '').join('');
+          }
         }
       }
-      console.error('[agent] stream ended, eventCount:', eventCount, 'fullText:', JSON.stringify(fullText));
-    } catch (e: any) {
-      console.error('[agent] stream error:', e.message);
+    } catch(err) {
+      console.error('[agent] stream error:', err.message, err.stack?.split('\n').slice(0,3).join(' | '));
     } finally {
       // ensure stream ends
       if (!stream.done) {
         stream.end();
-        console.error('[agent] stream.force ended');
       }
+    }
+
+    // Last resort: if fullText is still empty, try stream.finalText (set by buildStreamFn when done event is pushed)
+    if (!fullText) {
+      fullText = (stream as any).finalText || '';
     }
 
     // Save messages to session

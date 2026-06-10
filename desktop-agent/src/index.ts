@@ -105,7 +105,15 @@ async function handleRequest(agent: Agent, req: Request, writeStream: StreamWrit
 
         const result = await agent.chat(params.message, params.sessionKey, onDelta);
 
-        // Emit stream done event
+        // Send final accumulated text as delta before done, then done: true
+        if (result.text) {
+          writeStream({
+            jsonrpc: "2.0",
+            id: req.id,
+            method: "stream",
+            params: { delta: result.text, done: false }
+          });
+        }
         writeStream({
           jsonrpc: "2.0",
           id: req.id,

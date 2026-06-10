@@ -49,7 +49,7 @@
 desktopwork/
 ├── SPECS/
 │   └── desktopwork-design.md       ← 本文档
-├── server/                         ← Node HTTP Server（核心）
+├── desktop-agent/                      ← Node HTTP Server（核心）
 │   ├── src/
 │   │   ├── index.ts               ← 入口，起 HTTP server
 │   │   ├── auth.ts                ← 鉴权（stub，OIDC 后续接入）
@@ -155,7 +155,7 @@ agentLoop(prompts, context, config, signal, streamFn, runtime)
        └── buildStreamFn: 调用 LLM API，将 SSE 事件转为 EventStream
 ```
 
-**本项目的 buildStreamFn（`server/src/agent.ts` 内）职责：**
+**本项目的 buildStreamFn（`desktop-agent/src/agent.ts` 内）职责：**
 1. 用 `fetch` 调用 LLM API（OpenAI Protocol，`https://aegis-higress-gateway.baozun.com/v1/chat/completions`）
 2. 将 SSE 格式的响应解析为 `content_block_delta` →发出 `text_delta` 事件
 3. 将 `finish_reason` 解析为 `done` 事件
@@ -177,7 +177,7 @@ skills/
     └── SKILL.md        ← Skill 定义文件
 ```
 
-**本项目使用方式（`server/src/skills.ts`）：**
+**本项目使用方式（`desktop-agent/src/skills.ts`）：**
 ```typescript
 import { loadSkills } from '../vendor/bundles/agent-core.esm.js';
 
@@ -215,7 +215,7 @@ export async function loadUserSkills(skillsDirs: string[]) {
 
 **计划：OIDC 接入（后续）**
 - 集成目标：飞书、企业微信、Google Workspace 等
-- 届时替换 `server/src/auth.ts` 实现，API 接口不变
+- 届时替换 `desktop-agent/src/auth.ts` 实现，API 接口不变
 
 ```
 POST   /auth/login
@@ -300,11 +300,11 @@ Node 层根据 URL 前缀路由到不同 HTML App：
 
 | URL 前缀 | 映射到 |
 |----------|--------|
-| `/` 或 `/dashboard` | `server/apps/dashboard/index.html` |
-| `/chat` | `server/apps/chat/index.html` |
-| `/settings` | `server/apps/settings/index.html` |
-| `/auth/login` | `server/apps/auth/login.html` |
-| `/auth/logout` | `server/apps/auth/logout.html` |
+| `/` 或 `/dashboard` | `desktop-agent/apps/dashboard/index.html` |
+| `/chat` | `desktop-agent/apps/chat/index.html` |
+| `/settings` | `desktop-agent/apps/settings/index.html` |
+| `/auth/login` | `desktop-agent/apps/auth/login.html` |
+| `/auth/logout` | `desktop-agent/apps/auth/logout.html` |
 
 **Tauri Shell 加载策略：**
 - 主窗口加载 `/`（dashboard）
@@ -340,7 +340,7 @@ Shell 职责：
 fn main() {
     let port = find_available_port(3737);
     let node_child = Command::new("node")
-        .args(["server/src/index.ts", "--port", &port.to_string()])
+        .args(["desktop-agent/src/index.ts", "--port", &port.to_string()])
         .spawn()
         .expect("Failed to start node server");
 
@@ -492,7 +492,7 @@ pnpm build  # → 调用 server build + shell build
 ## 10. 里程碑（执行对照表）
 
 ### M1：Node HTTP 服务可独立运行
-- [ ] M1.1 目录结构（server/ + package.json）
+- [ ] M1.1 目录结构（desktop-agent/ + package.json）
 - [ ] M1.2 Auth Stub（任意密码登录）
 - [ ] M1.3 Config（读/写 JSON 配置）
 - [ ] M1.4 Agent Chat（buildStreamFn + agent-loop）

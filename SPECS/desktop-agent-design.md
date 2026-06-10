@@ -179,9 +179,9 @@ Node HTTP Server
 | **Tauri Shell** | 起 Node 子进程、创建窗口、加载 WebView、菜单 |
 | **Node HTTP Server** | 业务逻辑：Auth、Config、Agent Chat、Skills、Memory |
 | **HTML App** | 通过 window.* 使用 Node 层能力（Auth、Config、Agent） |
-| **server/vendor/bundles/agent-core** | 核心 Agent 循环（agentLoop、loadSkills） |
-| **server/vendor/bundles/memory-host-sdk** | 记忆存储与检索 |
-| **server/vendor/bundles/llm-core** | SSE EventStream 流处理 |
+| **desktop-agent/vendor/bundles/agent-core** | 核心 Agent 循环（agentLoop、loadSkills） |
+| **desktop-agent/vendor/bundles/memory-host-sdk** | 记忆存储与检索 |
+| **desktop-agent/vendor/bundles/llm-core** | SSE EventStream 流处理 |
 
 ---
 
@@ -313,7 +313,7 @@ Memory 是 Node 层内部能力，不对外暴露 API。
 
 ```
 desktopwork/
-├── server/                      <- Node HTTP Server (core)
+├── desktop-agent/              <- Node HTTP Server (core)
 │   ├── src/
 │   │   ├── index.ts            # entry: start HTTP server
 │   │   ├── auth.ts             # auth (stub, OIDC later)
@@ -648,7 +648,7 @@ Shell 只做五件事，不写任何业务逻辑：
 
 | 职责 | 说明 |
 |------|------|
-| **起 Node 子进程** | 启动 node server/src/index.ts，管理进程生命周期 |
+| **起 Node 子进程** | 启动 node desktop-agent/src/index.ts，管理进程生命周期 |
 | **验证 Node 服务健康** | 轮询 /auth/me，确认服务 ready 后创建窗口 |
 | **创建窗口加载 WebView** | 窗口加载 http://localhost:PORT |
 | **菜单管理** | 从 Node /config 获取菜单结构，渲染为原生菜单或 HTML 侧边栏 |
@@ -667,7 +667,7 @@ Shell 只做五件事，不写任何业务逻辑：
 fn main() {
     let port = find_available_port(3737);
     let node_child = Command::new("node")
-        .args(["server/src/index.ts", "--port", &port.to_string()])
+        .args(["desktop-agent/src/index.ts", "--port", &port.to_string()])
         .spawn()
         .expect("Failed to start node server");
 
@@ -960,10 +960,10 @@ fn app_log_tail(n: Option<usize>) -> Result<String, String> {
 ### 9.1 构建命令
 
 ```bash
-# 开发构建
+# 开发（Tauri 起 Node + 窗口）
 pnpm tauri dev
 
-# 生产构建
+# 生产打包
 pnpm tauri build
 ```
 
@@ -976,10 +976,7 @@ pnpm tauri build
   "version": "0.1.0",
   "identifier": "com.benjamin.desktopwork",
   "build": {
-    "beforeDevCommand": "pnpm dev",
-    "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm build",
-    "frontendDist": "../dist"
+    "devtools": true
   },
   "app": {
     "windows": [{
@@ -994,75 +991,36 @@ pnpm tauri build
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/32x32.png", "icons/128x128.png"],
-    "resources": {
-      "../desktop-agent": "desktop-agent"
-    }
+    "icon": ["icons/32x32.png", "icons/128x128.png"]
   }
 }
 ```
 
-**关键配置说明**：
-- `bundle.resources`：将 `desktop-agent/` 目录打包为 `desktop-agent` 资源
-- `bundle.identifier`：反向域名标识符，用于系统集成
-- `app.windows`：默认窗口大小 900×700，最小 600×400
+**关键说明**：
+- 无 `beforeDevCommand`：Node 服务由 Tauri Rust 侧通过 `Command::new("node")` 启动
+- 无 `frontendDist`：前端是 HTML App，由 Node HTTP 服务提供
+- 无 `bundle.resources`：Node进程通过 Tauri Command 启动，不作为静态资源打包
 
 ### 9.3 desktop-agent 打包
 
-desktop-agent 不使用 pnpm workspace 链接，依赖预编译的 OpenClaw Bundle。
+desktop-agent 是标准 Node 应用，打包时：
+1. `desktop-agent/vendor/bundles/` 已纳入 git（不依赖 submodule）
+2. Tauri 启动时通过 `shell/src-tauri/src/main.rs` 启动 Node 进程
+3. 不需要额外打包步骤
 
-**打包流程**：
-1. （可选）运行 `node scripts/extract-openclaw.mjs` 更新 bundle
-2. 将 `desktop-agent/vendor/bundles/` 整体打包入 Tauri 资源目录
-3. 不需要 TypeScript 编译（源码即分发）
+### 9.4 开发流程
 
-**package.json 配置**：
+```bash
+# 1. 独立运行 Node 服务（验证 API）
+cd desktop-agent
+node src/index.ts
 
-```json
-{
-  "name": "desktop-agent",
-  "version": "0.1.0",
-  "type": "module",
-  "main": "vendor/bundles/agent-core.esm.js",
-  "scripts": {
-    "build": "echo 'Bundles pre-built via scripts/extract-openclaw.mjs'",
-    "extract": "node ../../scripts/extract-openclaw.mjs --openclaw ../../vendor/openclaw --out vendor/bundles"
-  },
-  "dependencies": {
-    "ignore": "^7.0.5",
-    "typebox": "^1.1.39",
-    "yaml": "^2.9.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.7.0"
-  }
-}
+# 2. Tauri 窗口内开发（热加载 HTML）
+pnpm tauri dev
+
+# 3. 生产打包
+pnpm tauri build
 ```
-
-> 注意：`dependencies` 中不再有 OpenClaw 包，它们通过 `vendor/bundles/` 引入。
-
-### 9.4 构建输出
-
-| 平台 | 输出 |
-|------|------|
-| Windows | `src-tauri/target/release/bundle/nsis/*.exe` |
-| macOS | `src-tauri/target/release/bundle/dmg/*.app` |
-| Linux | `src-tauri/target/release/bundle/deb/*.deb` |
-
----
-
-## 10. 内存占用预估
-
-| 组件 | 预估内存 |
-|------|----------|
-| Node.js 运行时 | ~30MB |
-| OpenClaw Bundle: agent-core | ~10MB |
-| OpenClaw Bundle: memory-host-sdk | ~8MB |
-| OpenClaw Bundle: llm-core | ~5MB |
-| 其他（skills loader 等） | ~5MB |
-| **总计** | **~55-60MB** |
-
----
 
 ## 11. 实现步骤（M1 -> M4 执行指导）
 
@@ -1071,26 +1029,26 @@ desktop-agent 不使用 pnpm workspace 链接，依赖预编译的 OpenClaw Bund
 > 目标：Tauri 启动前，Node 服务可以独立运行、测试
 
 #### M1.1 目录结构
-- [ ] 创建 server/ 目录
-- [ ] server/package.json（express + TypeScript）
-- [ ] server/src/index.ts — HTTP server 入口（3737 端口）
+- [ ] 创建 desktop-agent/ 目录
+- [ ] desktop-agent/package.json（express + TypeScript）
+- [ ] desktop-agent/src/index.ts — HTTP server 入口（3737 端口）
 
 #### M1.2 Auth Stub
-- [ ] server/src/auth.ts — Stub 实现（任意密码登录）
+- [ ] desktop-agent/src/auth.ts — Stub 实现（任意密码登录）
 - [ ] POST /auth/login
 - [ ] GET /auth/me
 - [ ] POST /auth/logout
 - [ ] JWT 生成（jsonwebtoken，临时固定密钥）
 
 #### M1.3 Config
-- [ ] server/src/config.ts
+- [ ] desktop-agent/src/config.ts
 - [ ] 配置文件：~/.config/desktopwork/config.json
 - [ ] GET /config
 - [ ] GET/PATCH /config/apps/:appId
 - [ ] GET/PATCH /config/agent
 
 #### M1.4 Agent Chat
-- [ ] server/src/agent.ts — buildStreamFn（协议适配层）
+- [ ] desktop-agent/src/agent.ts — buildStreamFn（协议适配层）
 - [ ] 支持 OpenAI 协议（baseurl 有无 /v1 自动适配）
 - [ ] 支持 Anthropic 协议自动检测
 - [ ] POST /agent/chat — 流式 SSE + 非流式两种模式
@@ -1098,7 +1056,7 @@ desktop-agent 不使用 pnpm workspace 链接，依赖预编译的 OpenClaw Bund
 - [ ] 集成 loadSkills（复用 agent-core.loadSkills）
 
 #### M1.5 Skills 薄包装
-- [ ] server/src/skills.ts — import agent-core.loadSkills
+- [ ] desktop-agent/src/skills.ts — import agent-core.loadSkills
 - [ ] GET /skills
 - [ ] POST /skills/:id/enable|disable
 
@@ -1116,20 +1074,20 @@ desktop-agent 不使用 pnpm workspace 链接，依赖预编译的 OpenClaw Bund
 > 目标：用户在浏览器里能看到完整的 App 界面，window.* API 正常工作
 
 #### M2.1 共享资源
-- [ ] server/apps/_shared/auth.js — window.auth 注入
-- [ ] server/apps/_shared/config.js — window.config 注入
-- [ ] server/apps/_shared/styles.css — 共享样式
+- [ ] desktop-agent/apps/_shared/auth.js — window.auth 注入
+- [ ] desktop-agent/apps/_shared/config.js — window.config 注入
+- [ ] desktop-agent/apps/_shared/styles.css — 共享样式
 
 #### M2.2 dashboard App
-- [ ] server/apps/dashboard/index.html — 主面板
+- [ ] desktop-agent/apps/dashboard/index.html — 主面板
 
 #### M2.3 chat App
-- [ ] server/apps/chat/index.html — 对话界面
+- [ ] desktop-agent/apps/chat/index.html — 对话界面
 - [ ] 调用 window.agent.chat() 流式对话
 - [ ] 显示对话历史
 
 #### M2.4 settings App
-- [ ] server/apps/settings/index.html — 设置界面
+- [ ] desktop-agent/apps/settings/index.html — 设置界面
 - [ ] 修改 LLM 配置（调用 PATCH /config/agent）
 - [ ] 启停 Skills（调用 POST /skills/:id/enable|disable）
 

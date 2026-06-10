@@ -30,9 +30,35 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
-      - name: Install deps
+      # Install shell deps (tauri cli)
+      - name: Install shell deps
         run: pnpm install --frozen-lockfile
         working-directory: shell
+
+      # Install desktop-agent deps
+      - name: Install desktop-agent deps
+        run: pnpm install --frozen-lockfile
+        working-directory: desktop-agent
+
+      # Generate vendor bundles (runtime deps for llm-core, agent-core, memory-host-sdk)
+      - name: Extract OpenClaw bundles
+        run: node scripts/extract-openclaw.mjs --openclaw vendor/OpenClaw --out desktop-agent/vendor/bundles
+        working-directory: desktop-agent
+
+      # Compile TypeScript → JavaScript
+      - name: Compile TypeScript
+        run: pnpm run build
+        working-directory: desktop-agent
+
+      # Copy server files into shell/src-tauri/ for bundling
+      # At runtime these will be in the same dir as the .exe
+      - name: Copy server bundle
+        run: |
+          mkdir shell/src-tauri/server
+          xcopy /E /I /Y desktop-agent\dist shell\src-tauri\server\dist
+          xcopy /E /I /Y desktop-agent\vendor\bundles shell\src-tauri\server\vendor\bundles
+          xcopy /E /I /Y desktop-agent\node_modules shell\src-tauri\server\node_modules
+        working-directory: .
 
       - name: Build Tauri (Windows)
         run: pnpm tauri build
@@ -64,9 +90,29 @@ jobs:
       - name: Install pnpm
         run: npm install -g pnpm
 
-      - name: Install deps
+      - name: Install shell deps
         run: pnpm install --frozen-lockfile
         working-directory: shell
+
+      - name: Install desktop-agent deps
+        run: pnpm install --frozen-lockfile
+        working-directory: desktop-agent
+
+      - name: Extract OpenClaw bundles
+        run: node scripts/extract-openclaw.mjs --openclaw vendor/OpenClaw --out desktop-agent/vendor/bundles
+        working-directory: desktop-agent
+
+      - name: Compile TypeScript
+        run: pnpm run build
+        working-directory: desktop-agent
+
+      - name: Copy server bundle
+        run: |
+          mkdir -p shell/src-tauri/server
+          cp -R desktop-agent/dist shell/src-tauri/server/dist
+          cp -R desktop-agent/vendor/bundles shell/src-tauri/server/vendor/bundles
+          cp -R desktop-agent/node_modules shell/src-tauri/server/node_modules
+        working-directory: .
 
       - name: Build Tauri (macOS)
         run: pnpm tauri build

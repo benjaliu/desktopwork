@@ -17,32 +17,50 @@ use tokio::time::{sleep, Duration};
 // === Config ===
 
 struct AgentConfig {
-    agent_entry: PathBuf,
+    /// Absolute path to the Node HTTP server entry JS file.
+    /// In dev: desktop-agent/src/index.ts (tsx)
+    /// In prod: resolved from bundled resources (node)
+    server_entry: PathBuf,
     http_port: u16,
 }
 
 impl AgentConfig {
     fn from_env() -> Self {
-        let agent_entry = if cfg!(debug_assertions) {
-            PathBuf::from("/mnt/d/projects/desktopwork/desktop-agent/src/index.ts")
-        } else {
-            std::env::var("DESKTOP_AGENT_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| {
-                    PathBuf::from("/mnt/d/projects/desktopwork/desktop-agent/src/index.ts")
-                })
-        };
-
         let http_port = std::env::var("PORT")
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(3737);
 
-        Self { agent_entry, http_port }
+        let server_entry = if cfg!(debug_assertions) {
+            // Dev: use desktop-agent source dir, run with tsx
+            PathBuf::from("/mnt/d/projects/desktopwork/desktop-agent/src/index.ts")
+        } else {
+            // Prod: bundled server is at {exe_dir}/server/dist/index.js
+            std::env::current_exe()
+                .map(|p| p.parent().unwrap_or(&p).join("server/dist/index.js"))
+                .unwrap_or_else(|_| PathBuf::from("server/dist/index.js"))
+        };
+
+        Self {
+            server_entry,
+            http_port,
+        }
     }
 
     fn base_url(&self) -> String {
         format!("http://localhost:{}/", self.http_port)
+    }
+
+    fn is_ts_source(&self) -> bool {
+        self.server_entry.extension().map(|e| e == "ts").unwrap_or(false)
+    }
+
+    fn spawn_cmd(&self) -> (String, Vec<String>) {
+        if self.is_ts_source() {
+            ("tsx".to_string(), vec![self.server_entry.to_string_lossy().to_string()])
+        } else {
+            ("node".to_string(), vec![self.server_entry.to_string_lossy().to_string()])
+        }
     }
 }
 
@@ -63,13 +81,14 @@ impl NodeProcess {
         }
     }
 
-    async fn start(&self, entry: &PathBuf) -> Result<(), String> {
-        let (cmd, args) = self.start_cmd_for(entry);
+    async fn start(&self, config: &AgentConfig) -> Result<(), String> {
+        let (cmd, args) = config.spawn_cmd();
+
 
         log::info!("Spawning Node: {} {:?}", cmd, args);
 
-        let mut child = tokio::process::Command::new(cmd)
-            .args(&args)
+        let mut child = tokio::process::Command::new(&cmd)
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -91,14 +110,6 @@ impl NodeProcess {
         self.wait_for_ready().await?;
         log::info!("Node HTTP server ready at {}", self.base_url);
         Ok(())
-    }
-
-    fn start_cmd_for(&self, entry: &PathBuf) -> (&'static str, Vec<String>) {
-        if entry.extension().map(|e| e == "ts").unwrap_or(false) {
-            ("tsx", vec![entry.to_string_lossy().to_string()])
-        } else {
-            ("node", vec![entry.to_string_lossy().to_string()])
-        }
     }
 
     async fn wait_for_ready(&self) -> Result<(), String> {
@@ -166,11 +177,12 @@ fn main() {
 
     let config = AgentConfig::from_env();
     log::info!("DesktopWork Shell starting");
-    log::info!("  Agent entry: {:?}", config.agent_entry);
+    log::info!("  Server entry: {:?}", config.server_entry);
     log::info!("  HTTP port: {}", config.http_port);
+    log::info!("  Runner: {}", if config.is_ts_source() { "tsx" } else { "node" });
 
-    // Extract values before builder chain so config can be dropped
-    let agent_entry = config.agent_entry.clone();
+    // Extract values before builder chain
+    let server_entry = config.server_entry.clone();
     let http_port = config.http_port;
     let base_url = config.base_url();
     drop(config);
@@ -184,14 +196,20 @@ fn main() {
         .manage(AppState {
             node_process: node_process_for_state,
         })
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.app_handle().clone();
             let handle_for_window = handle.clone();
-            let entry = agent_entry;
+            let entry = server_entry;
             let node_proc = node_process_for_async;
 
+            // Config object to pass into async block
+            let agent_config = AgentConfig {
+                server_entry: entry,
+                http_port,
+            };
+
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = node_proc.start(&entry).await {
+                if let Err(e) = node_proc.start(&agent_config).await {
                     log::error!("Failed to start Node process: {}", e);
                     std::process::exit(1);
                 }

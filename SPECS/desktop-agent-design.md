@@ -264,7 +264,9 @@ POST /agent/chat
   Response (stream=false): { message: AgentMessage }
 ```
 
-### 3.5 Skills API
+### 3.5 Skills API（管理已安装的 Skills）
+
+> 注意：市场浏览（marketplace）功能在后续阶段考虑，当前只有已安装 Skills 的管理。
 
 ```
 GET  /skills
@@ -285,22 +287,13 @@ POST /skills/:id/disable
   Returns: { ok: true }
 ```
 
-### 3.6 Memory API
+### 3.6 Memory（非 API）
 
-```
-GET  /memory?query=...&limit=5
-  Headers: Authorization: Bearer <token>
-  Returns: [{ id, content, timestamp, score }]
+Memory 是 Node 层内部能力，不对外暴露 API。
 
-POST /memory
-  Headers: Authorization: Bearer <token>
-  Body:   { query?: string, content: string }
-  Returns: { id: string }
-
-DELETE /memory/:id
-  Headers: Authorization: Bearer <token>
-  Returns: { ok: true }
-```
+- Session 持久化：session.ts（JSONL 文件）
+- Memory 检索：agent.ts 内部调用 memory-host-sdk
+- HTML App 无需感知 Memory 存在
 
 ### 3.7 错误码约定
 

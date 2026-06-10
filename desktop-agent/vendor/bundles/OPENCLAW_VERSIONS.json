@@ -1,0 +1,27 @@
+{
+  "extractedAt": "2026-06-09T04:30:24.236Z",
+  "openclaw": {
+    "path": "/mnt/d/projects/desktopwork/vendor/openclaw",
+    "commit": "unknown",
+    "branch": "unknown",
+    "tag": "",
+    "version": "2026.6.2"
+  },
+  "bundles": {
+    "llm-core": {
+      "file": "llm-core.esm.js",
+      "status": "ok",
+      "sizeKB": 11
+    },
+    "agent-core": {
+      "file": "agent-core.esm.js",
+      "status": "failed",
+      "sizeKB": 0
+    },
+    "memory-host-sdk": {
+      "file": "memory-host-sdk.esm.js",
+      "status": "failed",
+      "sizeKB": 7622
+    }
+  }
+}

@@ -32,12 +32,14 @@ jobs:
 
       # Install shell deps (tauri cli)
       - name: Install shell deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
+        run: pnpm install
         working-directory: shell
 
       # Install desktop-agent deps
       - name: Install desktop-agent deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
+        run: pnpm install
         working-directory: desktop-agent
 
       # Vendor bundles are committed in desktop-agent/vendor/bundles/
@@ -89,11 +91,13 @@ jobs:
         run: npm install -g pnpm
 
       - name: Install shell deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
+        run: pnpm install
         working-directory: shell
 
       - name: Install desktop-agent deps
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
+        run: pnpm install
         working-directory: desktop-agent
 
       # Vendor bundles are committed — do not re-extract here

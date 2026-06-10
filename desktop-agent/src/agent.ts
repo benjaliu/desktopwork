@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { existsSync, mkdirSync, readdirSync, readFileSync, appendFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'fs';
 import { EventStream } from '../vendor/bundles/llm-core.esm.js';
 import type { AgentMessage } from '../vendor/bundles/agent-core.esm.js';
 
@@ -24,10 +24,20 @@ function resolveSessionsDir(): string {
   return join(resolveDataDir(), 'sessions');
 }
 
+const MAX_SESSION_KEY_LEN = 64;
+const SESSION_KEY_REGEX = /^[a-zA-Z0-9_-]+$/;
+
+function validateSessionKey(sessionKey: string): string {
+  if (!SESSION_KEY_REGEX.test(sessionKey)) throw new Error('invalid sessionKey');
+  if (sessionKey.length > MAX_SESSION_KEY_LEN) throw new Error('sessionKey too long');
+  return sessionKey;
+}
+
 function sessionFile(sessionKey: string): string {
+  const safeKey = validateSessionKey(sessionKey);
   const dir = resolveSessionsDir();
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  return join(dir, `${sessionKey}.jsonl`);
+  return join(dir, `${safeKey}.jsonl`);
 }
 
 function uuid(): string {
@@ -50,10 +60,7 @@ async function appendMessage(sessionKey: string, msg: AgentMessage): Promise<voi
 // buildStreamFn — 协议自适应（OpenAI / Anthropic SSE）
 // ---------------------------------------------------------------------------
 
-interface ProtocolResult {
-  events: AsyncGenerator<any, void, unknown>;
-  stop: () => void;
-}
+const DEFAULT_MAX_TOKENS = 4096;
 
 function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
   const resolvedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
@@ -74,23 +81,21 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
       ...(options.headers || {}),
     };
 
-    let fetchOptions: RequestInit = { method: 'POST', headers, signal: controller.signal as any };
+    const fetchOptions: RequestInit = { method: 'POST', headers, signal: controller.signal as any };
 
     let url: string;
     let body: any;
 
     if (isAnthropic) {
-      // Anthropic Messages API
       url = `${resolvedBaseUrl}/messages`;
       body = {
         model,
         messages: messages.filter((m: any) => m.role !== 'system'),
         system: messages.find((m: any) => m.role === 'system')?.content || '',
         stream: true,
-        max_tokens: 4096,
+        max_tokens: DEFAULT_MAX_TOKENS,
       };
     } else {
-      // OpenAI Responses / Chat API
       url = `${resolvedBaseUrl}/chat/completions`;
       body = { model, messages, stream: true };
     }
@@ -105,7 +110,6 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 
     if (!response.body) throw new Error('No response body');
 
-    // Create an EventStream that yields events
     const eventQueue: any[] = [];
     let resolveNext: ((v: IteratorResult<any>) => void) | null = null;
     let finished = false;
@@ -140,7 +144,6 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
               const parsed = JSON.parse(data);
 
               if (isAnthropic) {
-                // Anthropic SSE: content_block_delta, message_end, etc.
                 if (parsed.type === 'content_block_delta') {
                   const delta = parsed.delta?.text || '';
                   if (delta) {
@@ -155,13 +158,11 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
                     resolveNext = null;
                   }
                 } else if (parsed.type === 'message_delta') {
-                  // Final message with usage
                   eventQueue.push({ type: 'done', message: parsed.message });
                   resolveNext?.({ value: eventQueue.shift(), done: false });
                   resolveNext = null;
                 }
               } else {
-                // OpenAI SSE: choice.delta.delta or choice.message.content
                 const choice = parsed.choices?.[0];
                 if (!choice) continue;
 
@@ -242,9 +243,14 @@ router.post('/chat', async (req, res) => {
     return res.status(400).json({ error: 'message required' });
   }
 
+  // Validate sessionKey before use
+  try {
+    validateSessionKey(sessionKey);
+  } catch {
+    return res.status(400).json({ error: 'invalid sessionKey' });
+  }
+
   // Load config
-  const { default: configModule } = await import('./config.js');
-  // We need to read the config directly here to avoid circular deps
   const fs = await import('fs');
   const configPath = join(process.env.HOME || '', '.config', 'desktopwork', 'config.json');
   let agentConfig = { model: 'gpt-4o', provider: 'openai', apiKey: '', baseUrl: 'https://api.openai.com/v1' };
@@ -272,7 +278,6 @@ router.post('/chat', async (req, res) => {
   ];
 
   if (!stream) {
-    // Non-streaming: collect all deltas then return
     const streamFn = buildStreamFn(baseUrl, apiKey, model);
     try {
       const core = await getAgentCore();
@@ -305,12 +310,18 @@ router.post('/chat', async (req, res) => {
   res.flushHeaders();
 
   const streamFn = buildStreamFn(baseUrl, apiKey, model);
+  const controller = new AbortController();
+
+  req.on('close', () => {
+    controller.abort();
+    res.end();
+  });
 
   (async () => {
     try {
       const core = await getAgentCore();
       const agentLoop = core.agentLoop;
-      const eventStream = await agentLoop(llmMessages, {}, { model, streamFn });
+      const eventStream = await agentLoop(llmMessages, {}, { model, streamFn, signal: controller.signal });
 
       let fullText = '';
 
@@ -334,13 +345,14 @@ router.post('/chat', async (req, res) => {
         }
       }
     } catch (e: any) {
+      if (e.name === 'AbortError') {
+        res.end();
+        return;
+      }
       res.write(`data: ${JSON.stringify({ type: 'error', error: e.message })}\n\n`);
       res.end();
     }
   })();
-
-  // Keep request alive until SSE closes
-  req.on('close', () => {});
 });
 
 export default router;

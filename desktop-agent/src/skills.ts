@@ -6,7 +6,6 @@ import { fileURLToPath } from 'url';
 const router = Router();
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const BUNDLES_DIR = join(__dirname, '..', 'vendor', 'bundles');
 
 let skillsCache: any[] = [];
 let skillsLoaded = false;

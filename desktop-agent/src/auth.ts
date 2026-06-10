@@ -4,7 +4,7 @@ import jwt from 'jsonwebtoken';
 const router = Router();
 
 // 临时固定密钥（后续替换为 OIDC）
-const JWT_SECRET = 'desktopwork-stub-secret-2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production-2026';
 
 // Stub 用户表（任意密码都可通过）
 const STUB_USERS: Record<string, { userId: string; name: string; role: string }> = {

@@ -38,4 +38,4 @@ shell/src-tauri/src-tauri/target/
 
 # Old project leftovers (root level only)
 /src-tauri/
-.vscode/
+.vscode/desktop-agent/vendor/bundles/*.map

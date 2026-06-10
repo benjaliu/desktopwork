@@ -1,9 +1,9 @@
 {
-  "extractedAt": "2026-06-09T04:30:24.236Z",
+  "extractedAt": "2026-06-10T05:52:47.046Z",
   "openclaw": {
-    "path": "/mnt/d/projects/desktopwork/vendor/openclaw",
-    "commit": "unknown",
-    "branch": "unknown",
+    "path": "/mnt/d/projects/desktopwork/vendor/OpenClaw",
+    "commit": "26ac5717d8a38cb1a5578e451acc890de5f87618",
+    "branch": "master",
     "tag": "",
     "version": "2026.6.2"
   },
@@ -15,13 +15,13 @@
     },
     "agent-core": {
       "file": "agent-core.esm.js",
-      "status": "failed",
-      "sizeKB": 0
+      "status": "ok",
+      "sizeKB": 526
     },
     "memory-host-sdk": {
       "file": "memory-host-sdk.esm.js",
-      "status": "failed",
-      "sizeKB": 7622
+      "status": "ok",
+      "sizeKB": 7637
     }
   }
 }

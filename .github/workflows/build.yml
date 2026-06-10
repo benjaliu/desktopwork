@@ -40,10 +40,8 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: desktop-agent
 
-      # Generate vendor bundles (runtime deps for llm-core, agent-core, memory-host-sdk)
-      - name: Extract OpenClaw bundles
-        run: node scripts/extract-openclaw.mjs --openclaw vendor/OpenClaw --out desktop-agent/vendor/bundles
-        working-directory: desktop-agent
+      # Vendor bundles are committed in desktop-agent/vendor/bundles/
+      # (user will re-extract and update after OpenClaw submodule init)
 
       # Compile TypeScript → JavaScript
       - name: Compile TypeScript
@@ -98,9 +96,7 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: desktop-agent
 
-      - name: Extract OpenClaw bundles
-        run: node scripts/extract-openclaw.mjs --openclaw vendor/OpenClaw --out desktop-agent/vendor/bundles
-        working-directory: desktop-agent
+      # Vendor bundles are committed — do not re-extract here
 
       - name: Compile TypeScript
         run: pnpm run build

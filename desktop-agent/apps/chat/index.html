@@ -28,13 +28,18 @@
 
   <script src="/_shared/auth.js"></script>
   <script src="/_shared/config.js"></script>
+  <script src="/_shared/agent.js"></script>
   <script>
     async function init() {
-      if (!auth.getToken()) { window.location.href = '/auth/login.html'; return; }
+      if (!window.auth.getToken()) {
+        window.location.href = '/auth/login.html';
+        return;
+      }
 
       const messagesEl = document.getElementById('chat-messages');
       const inputEl = document.getElementById('chat-input');
       const sendBtn = document.getElementById('send-btn');
+      let streamingBubble = null;
 
       function addMessage(role, content) {
         const div = document.createElement('div');
@@ -45,6 +50,19 @@
         `;
         messagesEl.appendChild(div);
         messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
+      }
+
+      function addStreamingBubble() {
+        const div = document.createElement('div');
+        div.className = 'message assistant streaming';
+        div.innerHTML = `
+          <div class="avatar">🤖</div>
+          <div class="bubble"><span class="bubble-text"></span><span class="cursor">▋</span></div>
+        `;
+        messagesEl.appendChild(div);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+        return div;
       }
 
       function escapeHtml(text) {
@@ -54,35 +72,53 @@
           .replace(/>/g, '&gt;');
       }
 
+      function appendToBubble(bubble, delta) {
+        const textSpan = bubble.querySelector('.bubble-text');
+        textSpan.textContent += delta;
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      }
+
+      function finalizeBubble(bubble, content) {
+        bubble.querySelector('.cursor')?.remove();
+        bubble.querySelector('.bubble-text').textContent = content;
+      }
+
+      function setInputEnabled(enabled) {
+        inputEl.disabled = !enabled;
+        sendBtn.disabled = !enabled;
+        sendBtn.textContent = enabled ? 'Send' : 'Sending...';
+      }
+
       async function sendMessage() {
         const message = inputEl.value.trim();
         if (!message) return;
         inputEl.value = '';
         addMessage('user', message);
-        sendBtn.disabled = true;
+        setInputEnabled(false);
+
+        const bubble = addStreamingBubble();
+        let fullText = '';
 
         try {
-          const res = await fetch('/agent/chat', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${auth.getToken()}`,
+          await window.agent.chat(message, {
+            onDelta(delta) {
+              appendToBubble(bubble, delta);
+              fullText += delta;
             },
-            body: JSON.stringify({ message, stream: false }),
+            onEnd(content) {
+              finalizeBubble(bubble, content || fullText);
+              setInputEnabled(true);
+            },
+            onError(err) {
+              bubble.querySelector('.cursor')?.remove();
+              bubble.querySelector('.bubble-text').textContent = `Error: ${err}`;
+              setInputEnabled(true);
+            },
           });
-
-          if (!res.ok) {
-            const err = await res.json();
-            addMessage('assistant', `Error: ${err.error || res.statusText}`);
-            return;
-          }
-
-          const data = await res.json();
-          addMessage('assistant', data.text || '(empty response)');
         } catch (e) {
-          addMessage('assistant', `Network error: ${e.message}`);
-        } finally {
-          sendBtn.disabled = false;
+          bubble.querySelector('.cursor')?.remove();
+          bubble.querySelector('.bubble-text').textContent = `Error: ${e.message}`;
+          setInputEnabled(true);
         }
       }
 
@@ -94,7 +130,6 @@
         }
       });
 
-      // Auto-focus
       inputEl.focus();
     }
 

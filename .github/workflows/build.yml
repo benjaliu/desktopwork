@@ -54,6 +54,7 @@ jobs:
         run: |
           mkdir shell\src-tauri\server
           xcopy /E /I /Y desktop-agent\dist shell\src-tauri\server\dist
+          xcopy /E /I /Y desktop-agent\apps shell\src-tauri\server\apps
           xcopy /E /I /Y desktop-agent\vendor\bundles shell\src-tauri\server\vendor\bundles
           xcopy /E /I /Y desktop-agent\node_modules shell\src-tauri\server\node_modules
         working-directory: .
@@ -105,9 +106,11 @@ jobs:
       - name: Copy server bundle
         run: |
           mkdir -p shell/src-tauri/server/dist
+          mkdir -p shell/src-tauri/server/apps
           mkdir -p shell/src-tauri/server/vendor/bundles
           mkdir -p shell/src-tauri/server/node_modules
           cp -R desktop-agent/dist/* shell/src-tauri/server/dist/
+          cp -R desktop-agent/apps/* shell/src-tauri/server/apps/
           cp -R desktop-agent/vendor/bundles/* shell/src-tauri/server/vendor/bundles/
           cp -R desktop-agent/node_modules/* shell/src-tauri/server/node_modules/
         working-directory: .

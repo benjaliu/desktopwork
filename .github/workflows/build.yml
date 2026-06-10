@@ -26,13 +26,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "pnpm"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install pnpm
+        run: npm install -g pnpm
 
-      - name: Install root deps
+      - name: Install deps
         run: pnpm install --frozen-lockfile
+        working-directory: shell
 
       - name: Build Tauri (Windows)
         run: pnpm tauri build
@@ -53,13 +53,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-          cache: "pnpm"
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      - name: Install pnpm
+        run: npm install -g pnpm
 
-      - name: Install root deps
+      - name: Install deps
         run: pnpm install --frozen-lockfile
+        working-directory: shell
 
       - name: Build Tauri (macOS)
         run: pnpm tauri build

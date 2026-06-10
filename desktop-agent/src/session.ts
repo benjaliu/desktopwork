@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import type { AgentMessage } from '../vendor/bundles/agent-core.esm.js';
-import type { Session } from '../vendor/bundles/agent-core.esm.js';
+import type { AgentMessage } from '@openclaw/agent-core';
+import type { Session } from '@openclaw/agent-core';
 
 // Simple fs abstraction for JsonlSessionStorage
 const nodeFs = {
@@ -88,7 +88,7 @@ export function createSessionStore(sessionsPath: string): SessionStore {
 
   async function loadSession(sessionKey: string): Promise<Session | null> {
     const filePath = await getFilePath(sessionKey);
-    const { JsonlSessionStorage } = await import('../vendor/bundles/agent-core.esm.js');
+    const { JsonlSessionStorage } = await import('@openclaw/agent-core');
 
     const readResult = await nodeFs.readTextFile(filePath);
     if (!readResult.ok) {
@@ -116,14 +116,14 @@ export function createSessionStore(sessionsPath: string): SessionStore {
   async function appendMessage(sessionKey: string, msg: AgentMessage): Promise<void> {
     await ensureStorage();
     const filePath = await getFilePath(sessionKey);
-    const { JsonlSessionStorage } = await import('../vendor/bundles/agent-core.esm.js');
+    const { JsonlSessionStorage } = await import('@openclaw/agent-core');
 
     const readResult = await nodeFs.readTextFile(filePath);
     if (!readResult.ok && readResult.error.code !== 'not_found') {
       throw new Error(readResult.error.message);
     }
 
-    let storage: InstanceType<typeof JsonlSessionStorage>;
+    let storage: any;
     if (readResult.ok) {
       storage = await JsonlSessionStorage.open(nodeFs as any, filePath);
     } else {
@@ -137,7 +137,7 @@ export function createSessionStore(sessionsPath: string): SessionStore {
     // Build entry from message (timestamp must be ISO string for JsonlSessionStorage)
     const ts = msg.timestamp ? new Date(msg.timestamp).toISOString() : new Date().toISOString();
     const entry = {
-      id: msg.id || crypto.randomUUID(),
+      id: (msg as any).id || crypto.randomUUID(),
       type: 'message' as const,
       message: msg,
       timestamp: ts,

@@ -35,13 +35,10 @@ jobs:
         run: pnpm install --no-lockfile --ignore-scripts
         working-directory: shell
 
-      # Install desktop-agent deps
+      # Install desktop-agent deps (includes @openclaw/* from workspace)
       - name: Install desktop-agent deps
         run: pnpm install --no-lockfile --ignore-scripts
         working-directory: desktop-agent
-
-      # Vendor bundles are committed in desktop-agent/vendor/bundles/
-      # (user will re-extract and update after OpenClaw submodule init)
 
       # Compile TypeScript → JavaScript
       - name: Compile TypeScript
@@ -50,12 +47,12 @@ jobs:
 
       # Copy server files into shell/src-tauri/ for bundling
       # At runtime these will be in the same dir as the .exe
+      # node_modules/@openclaw/ is included (symlinks resolved by xcopy)
       - name: Copy server bundle
         run: |
           mkdir shell\src-tauri\server
           xcopy /E /I /Y desktop-agent\dist shell\src-tauri\server\dist
           xcopy /E /I /Y desktop-agent\apps shell\src-tauri\server\apps
-          xcopy /E /I /Y desktop-agent\vendor\bundles shell\src-tauri\server\vendor\bundles
           xcopy /E /I /Y desktop-agent\node_modules shell\src-tauri\server\node_modules
         working-directory: .
 
@@ -97,8 +94,6 @@ jobs:
         run: pnpm install --no-lockfile --ignore-scripts
         working-directory: desktop-agent
 
-      # Vendor bundles are committed — do not re-extract here
-
       - name: Compile TypeScript
         run: pnpm run build
         working-directory: desktop-agent
@@ -107,11 +102,9 @@ jobs:
         run: |
           mkdir -p shell/src-tauri/server/dist
           mkdir -p shell/src-tauri/server/apps
-          mkdir -p shell/src-tauri/server/vendor/bundles
           mkdir -p shell/src-tauri/server/node_modules
           cp -R desktop-agent/dist/* shell/src-tauri/server/dist/
           cp -R desktop-agent/apps/* shell/src-tauri/server/apps/
-          cp -R desktop-agent/vendor/bundles/* shell/src-tauri/server/vendor/bundles/
           cp -R desktop-agent/node_modules/* shell/src-tauri/server/node_modules/
         working-directory: .
 

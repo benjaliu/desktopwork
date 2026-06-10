@@ -21,10 +21,10 @@ DesktopWork 是一个桌面客户端应用，用户安装后配置好 LLM 即可
 |------|------|------|
 | 桌面框架 | **Tauri v2** | 轻量、跨平台、安全 |
 | 前端 | **React 19 + TypeScript** | 成熟生态 |
-| Agent 核心 | **OpenClaw Bundle** | agent-core ESM bundle |
-| 记忆引擎 | **OpenClaw Bundle** | memory-host-sdk ESM bundle |
-| LLM 抽象 | **OpenClaw Bundle** | llm-core ESM bundle |
-| 技能加载 | **OpenClaw Bundle** | harness/skills |
+| Agent 核心 | **@openclaw/agent-core** | agentLoop、loadSkills |
+| 记忆引擎 | **@openclaw/memory-host-sdk** | 记忆存储与检索 |
+| LLM 抽象 | **@openclaw/llm-core** | EventStream SSE |
+| 技能加载 | **@openclaw/agent-core** | loadSkills、harness |
 | 构建工具 | **Vite** | 快速 HMR |
 | 包管理 | **pnpm** | Monorepo 友好 |
 
@@ -32,95 +32,67 @@ DesktopWork 是一个桌面客户端应用，用户安装后配置好 LLM 即可
 
 #### 背景
 
-DesktopWork 是独立项目，不在 OpenClaw pnpm workspace 内。OpenClaw 的 `@openclaw/*` 包未被 npm publish，无法通过 `npm install` 安装。
+DesktopWork 通过 pnpm `file:` 协议直接引用 `vendor/OpenClaw/packages/` 下的 OpenClaw monorepo packages，不走 npm publish。
 
-#### 方案：Submodule + Bundle 提取
+#### 方案：pnpm file: + 完整 monorepo 复制
 
 ```
 desktopwork/
-├── vendor/                     ← OpenClaw submodule（构建时用，打包时排除）
-│   └── openclaw/              ← git submodule，指向 OpenClaw 仓库
-│       └── scripts/
-│           └── require-shim.mjs  ← ESM require shim（随 submodule 提供）
-├── scripts/
-│   └── extract-openclaw.mjs    ← 提取工具
+├── vendor/
+│   └── OpenClaw/               ← 完整 OpenClaw monorepo
+│       └── packages/
+│           ├── agent-core/       ← @openclaw/agent-core
+│           │   └── dist/         ← 预编译 ESM（agentLoop、loadSkills 等）
+│           └── llm-core/         ← @openclaw/llm-core
+│               └── dist/         ← 预编译 ESM（EventStream 等）
 └── desktop-agent/
-    └── vendor/
-        └── bundles/           ← 提取后的 bundle（纳入 git）
-            ├── llm-core.esm.js
-            ├── agent-core.esm.js
-            ├── memory-host-sdk.esm.js
-            └── OPENCLAW_VERSIONS.json
+    └── node_modules/
+        └── @openclaw/            ← pnpm file: 软链接 → vendor/OpenClaw/packages/
 ```
 
-> 📖 **详细技术决策**（dotenv `require('fs')` 问题、入口点选择、shim 方案）见 [module-extraction-decision.md](./module-extraction-decision.md)。
-
-**工作流**：
-
-```bash
-# 首次初始化 submodule
-git submodule add https://github.com/benjaliu/openclaw vendor/openclaw
-
-# 更新 OpenClaw 版本
-cd vendor/openclaw && git pull origin main
-cd ../.. && node scripts/extract-openclaw.mjs \
-  --openclaw vendor/openclaw \
-  --out desktop-agent/vendor/bundles
-# 提交新的 bundle 文件
-git add desktop-agent/vendor/bundles
-git commit -m "chore: update OpenClaw bundle"
-```
-
-**打包时不包含 submodule**：Tauri 的 `bundle.resources` 只包含 `desktop-agent/vendor/bundles/`，不包含 `vendor/openclaw` 目录。
-
-#### 提取工具（extract-openclaw.mjs）
-
-- 基于 esbuild 将 OpenClaw packages 打为单文件 ESM bundle
-- 内联所有内部 `@openclaw/*` 依赖
-- **memory-host-sdk 使用 `--inject` + require-shim**：解决 dotenv CJS 模块在 ESM bundle 中的 `require('fs')` 动态调用问题（详见 [module-extraction-decision.md](./module-extraction-decision.md) §3）
-- **memory-host-sdk 入口点**：`src/runtime.ts`（非 `src/engine.ts`，后者有 dotenv 深层依赖）
-- 自动记录 git commit、branch、tag、version 到 `OPENCLAW_VERSIONS.json`
-- 当前输出（v2026.6.2）：
-
-| Bundle | 大小 |
-|--------|------|
-| llm-core.esm.js | ~358KB |
-| agent-core.esm.js | ~525KB |
-| memory-host-sdk.esm.js | ~7.6MB |
-
-
-#### 版本记录
-
-`OPENCLAW_VERSIONS.json` 记录每次提取的 OpenClaw 版本信息：
+**package.json 声明**（desktop-agent）：
 
 ```json
 {
-  "extractedAt": "2026-06-09T01:36:49.157Z",
-  "openclaw": {
-    "path": "/home/benjamin/OpenClaw",
-    "commit": "b8adc11977ab9dc1eb558dc070bfe63df75911c5",
-    "branch": "main",
-    "tag": "",
-    "version": "2026.6.2"
-  },
-  "bundles": {
-    "llm-core": { "file": "llm-core.esm.js", "status": "ok", "sizeKB": 358 },
-    "agent-core": { "file": "agent-core.esm.js", "status": "ok", "sizeKB": 525 },
-    "memory-host-sdk": { "file": "memory-host-sdk.esm.js", "status": "ok", "sizeKB": 7618 }
+  "dependencies": {
+    "@openclaw/agent-core": "file:../vendor/OpenClaw/packages/agent-core",
+    "@openclaw/llm-core": "file:../vendor/OpenClaw/packages/llm-core"
   }
 }
 ```
+
+**CI 工作流**：
+
+```bash
+# 1. 复制完整 monorepo 到 bundle
+cp -R vendor/OpenClaw server/vendor/OpenClaw
+
+# 2. desktop-agent 安装依赖（pnpm 创建 @openclaw 软链接）
+cd desktop-agent && pnpm install --no-lockfile --ignore-scripts
+
+# 3. 复制 resolved @openclaw 到 bundle
+cp -R desktop-agent/node_modules/@openclaw/* server/node_modules/@openclaw/
+```
+
+**运行时**：Node.js 模块解析从 `server/` 向上查找 `node_modules/@openclaw/` → 找到 `server/node_modules/@openclaw/` 中的预编译 dist 文件。
 
 #### 优势
 
 | 优势 | 说明 |
 |------|------|
-| 零 npm 依赖 | 不依赖 OpenClaw publish |
-| 版本可溯源 | `OPENCLAW_VERSIONS.json` 记录 commit |
-| 打包干净 | submodule 不打入最终安装包 |
-| 独立开发 | desktop-agent 完整独立，不依赖 OpenClaw 目录结构 |
-| 更新流程清晰 | pull → extract → commit |
-| 技术决策透明 | 关键问题（如 dotenv ESM 兼容性）见 [module-extraction-decision.md](./module-extraction-decision.md) |
+| 极简管线 | 无提取步骤，pnpm install 即可 |
+| 标准方式 | 直接引用 npm 包（file:），符合 pnpm 规范 |
+| tree-shakeable | bundler 只打包用到的 symbol |
+| 独立开发 | desktop-agent 完全自包含，不依赖外部服务 |
+| 调试友好 | 软链接指向源码，可直接断点调试 |
+| 无 extract 脚本 | 不需要 `extract-openclaw.mjs` |
+
+#### 已知限制
+
+| 限制 | 说明 |
+|------|------|
+| vendor 体积 | 复制完整 monorepo（~70MB），但 Tauri 打包后 tree-shake 不大 |
+| 内部 import | packages 之间 `@openclaw/*` import 由 Node 运行时解析 |
 
 ---
 
@@ -179,9 +151,9 @@ Node HTTP Server
 | **Tauri Shell** | 起 Node 子进程、创建窗口、加载 WebView、菜单 |
 | **Node HTTP Server** | 业务逻辑：Auth、Config、Agent Chat、Skills、Memory |
 | **HTML App** | 通过 window.* 使用 Node 层能力（Auth、Config、Agent） |
-| **desktop-agent/vendor/bundles/agent-core** | 核心 Agent 循环（agentLoop、loadSkills） |
-| **desktop-agent/vendor/bundles/memory-host-sdk** | 记忆存储与检索 |
-| **desktop-agent/vendor/bundles/llm-core** | SSE EventStream 流处理 |
+| **desktop-agent/node_modules/@openclaw/agent-core** | 核心 Agent 循环（agentLoop、loadSkills） |
+| **desktop-agent/node_modules/@openclaw/memory-host-sdk** | 记忆存储与检索 |
+| **desktop-agent/node_modules/@openclaw/llm-core** | SSE EventStream 流处理 |
 
 ---
 
@@ -330,21 +302,19 @@ desktopwork/
 │   │   │   └── index.html
 │   │   └── settings/           # settings App
 │   │       └── index.html
-│   ├── vendor/bundles/         # OpenClaw Bundles
-│   │   ├── llm-core.esm.js
-│   │   ├── agent-core.esm.js
-│   │   ├── memory-host-sdk.esm.js
-│   │   └── OPENCLAW_VERSIONS.json
 │   └── package.json
-├── shell/                      <- Tauri Shell (wrapper)
-│   ├── src-tauri/             # Rust code
-│   │   └── src/
-│   │       ├── main.rs       # entry: start Node + window
-│   │       ├── menu.rs         # menu management
-│   │       └── ipc.rs          # Tauri IPC (window control)
-│   └── tauri.conf.json
-└── scripts/
-    └── extract-openclaw.mjs    # extract OpenClaw bundles script
+├── vendor/                      # OpenClaw monorepo（通过 pnpm file: 引用）
+│   └── OpenClaw/
+│       └── packages/
+│           ├── agent-core/dist/
+│           └── llm-core/dist/
+└── shell/                      <- Tauri Shell (wrapper)
+    ├── src-tauri/             # Rust code
+    │   └── src/
+    │       ├── main.rs       # entry: start Node + window
+    │       ├── menu.rs         # menu management
+    │       └── ipc.rs          # Tauri IPC (window control)
+    └── tauri.conf.json
 ```
 
 ### 4.2 模块详解
@@ -397,7 +367,7 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 职责：JSONL 文件读写，Agent 消息持久化。
 
 ```typescript
-import { JsonlSessionStorage } from '../vendor/bundles/agent-core.esm.js';
+import { JsonlSessionStorage } from '@openclaw/agent-core';
 
 const nodeFs = {
   async readTextFile(path) { return { ok: true, value: readFileSync(path, 'utf-8') }; },
@@ -416,7 +386,7 @@ export async function createSessionStore(dataDir: string) {
 #### skills.ts — Skills 加载（复用 agent-core）
 
 ```typescript
-import { loadSkills } from '../vendor/bundles/agent-core.esm.js';
+import { loadSkills } from '@openclaw/agent-core';
 
 const nodeFs = {
   async readTextFile(path) { ... },
@@ -522,7 +492,7 @@ LLM 回复
 - 启动时加载，运行时复用
 
 ```typescript
-import { loadSkills } from '../vendor/bundles/agent-core.esm.js';
+import { loadSkills } from '@openclaw/agent-core';
 
 export async function loadUserSkills(skillsDirs: string[]) {
   const env = { readFile: fs.promises.readFile, readDir: fs.promises.readdir, ... };
@@ -1003,7 +973,6 @@ pnpm tauri build
 ### 9.3 desktop-agent 打包
 
 desktop-agent 是标准 Node 应用，打包时：
-1. `desktop-agent/vendor/bundles/` 已纳入 git（不依赖 submodule）
 2. Tauri 启动时通过 `shell/src-tauri/src/main.rs` 启动 Node 进程
 3. 不需要额外打包步骤
 

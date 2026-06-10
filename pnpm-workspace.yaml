@@ -1,0 +1,5 @@
+packages:
+  - desktop-agent
+  - vendor/OpenClaw/packages/agent-core
+  - vendor/OpenClaw/packages/llm-core
+  - vendor/OpenClaw/packages/memory-host-sdk

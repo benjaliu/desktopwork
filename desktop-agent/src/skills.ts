@@ -13,7 +13,7 @@ let skillsLoaded = false;
 async function loadSkills(): Promise<any[]> {
   if (skillsLoaded) return skillsCache;
   try {
-    const { loadSkills } = await import(`../vendor/bundles/agent-core.esm.js`);
+    const { loadSkills } = await import('@openclaw/agent-core');
     const skillsDir = join(process.env.HOME || '', '.config', 'desktopwork', 'skills');
     const env = {
       readFile: readFile,
@@ -26,7 +26,7 @@ async function loadSkills(): Promise<any[]> {
         }
       },
     };
-    const { skills } = await loadSkills(env, [skillsDir]);
+    const { skills } = await loadSkills(env as any, [skillsDir]);
     skillsCache = skills || [];
     skillsLoaded = true;
     return skillsCache;

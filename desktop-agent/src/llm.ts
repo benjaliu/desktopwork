@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
-import type { EventStream } from '../vendor/bundles/llm-core.esm.js';
+import type { EventStream } from '@openclaw/llm-core';
 
 export interface ModelConfig {
   id: string;
@@ -69,7 +69,7 @@ export type StreamFn = (
 ) => Promise<EventStream<LLMResponse>>;
 
 // Re-export AgentMessage from agent-core
-import type { AgentMessage } from '../vendor/bundles/agent-core.esm.js';
+import type { AgentMessage } from '@openclaw/agent-core';
 export type { AgentMessage };
 
 export function loadLLMConfig(): LLMConfig {

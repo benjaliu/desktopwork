@@ -2,8 +2,8 @@ import { Router } from 'express';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'fs';
-import { EventStream } from '../vendor/bundles/llm-core.esm.js';
-import type { AgentMessage } from '../vendor/bundles/agent-core.esm.js';
+import { EventStream } from '@openclaw/llm-core';
+import type { AgentMessage } from '@openclaw/agent-core';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const router = Router();
@@ -69,7 +69,7 @@ function buildStreamFn(baseUrl: string, apiKey: string) {
   return async function streamSimple(
     _model: any,  // model passed by agentLoop (overrides closure model if used)
     _ctx: { messages: any[]; signal?: AbortSignal } = { messages: [] }
-  ): Promise<EventStream> {
+  ): Promise<EventStream<any>> {
     // Use model from _model (passed by agentLoop), not from closure
     const modelId = typeof _model === 'string' ? _model : (_model?.id || String(_model));
     const messages = _ctx.messages;
@@ -113,7 +113,7 @@ function buildStreamFn(baseUrl: string, apiKey: string) {
 
     if (!response.body) throw new Error('No response body');
 
-    const stream = new EventStream(
+    const stream = new EventStream<any, any>(
       (event) => event.type === 'done' || event.type === 'error',
       (event) => event.type === 'done' ? event.message : undefined
     );
@@ -213,7 +213,7 @@ let agentCore: any = null;
 
 async function getAgentCore() {
   if (!agentCore) {
-    agentCore = await import('../vendor/bundles/agent-core.esm.js');
+    agentCore = await import('@openclaw/agent-core');
   }
   return agentCore;
 }
@@ -265,15 +265,15 @@ router.post('/chat', async (req, res) => {
 
   // Build messages from session history
   const history = await getMessages(sessionKey);
-  const userMsg: AgentMessage = {
+  const userMsg = {
     id: uuid(),
-    role: 'user',
+    role: 'user' as const,
     content: message,
     timestamp: Date.now(),
   };
 
   const llmMessages = [
-    ...history.map((m) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' })),
+    ...history.map((m: any) => ({ role: m.role, content: typeof m.content === 'string' ? m.content : '' })),
     { role: 'user' as const, content: message },
   ];
 
@@ -288,17 +288,17 @@ router.post('/chat', async (req, res) => {
         undefined,
         streamFn
       );
-      for await (const _event of eventStream) {
+      for await (const _event of eventStream as any) {
         // consume iterator — agentLoop completes when agent_end is emitted
       }
       const result = await eventStream.result();
       const finalMsg = Array.isArray(result) ? result[result.length - 1] : result;
       console.error('DEBUG result:', JSON.stringify(result)?.slice(0, 200));
-      const fullText = finalMsg?.content?.[0]?.text || '';
-      const assistantMsg: AgentMessage = {
+      const fullText = (finalMsg?.content?.[0] as any)?.text || '';
+      const assistantMsg: any = {
         id: uuid(),
         role: 'assistant',
-        content: fullText,
+        content: [{ type: 'text', text: fullText }],
         timestamp: Date.now(),
       };
       await appendMessage(sessionKey, userMsg);
@@ -334,18 +334,18 @@ router.post('/chat', async (req, res) => {
         streamFn
       );
       let lastText = '';
-      for await (const event of eventStream) {
-        if (event.type === 'message_update' && event.message?.content?.[0]?.text) {
-          const fullText = event.message.content[0].text;
+      for await (const event of eventStream as any) {
+        if (event.type === 'message_update' && (event.message?.content?.[0] as any)?.text) {
+          const fullText = (event.message.content[0] as any).text || '';
           const delta = fullText.slice(lastText.length);
           lastText = fullText;
           res.write(`data: ${JSON.stringify({ type: 'text_delta', delta })}\n\n`);
         }
         if (event.type === 'agent_end') {
-          const assistantMsg: AgentMessage = {
+          const assistantMsg: any = {
             id: uuid(),
             role: 'assistant',
-            content: lastText,
+            content: [{ type: 'text', text: lastText }],
             timestamp: Date.now(),
           };
           await appendMessage(sessionKey, userMsg);

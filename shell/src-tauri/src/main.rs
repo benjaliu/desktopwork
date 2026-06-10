@@ -32,10 +32,8 @@ impl AgentConfig {
             .unwrap_or(3737);
 
         let server_entry = if cfg!(debug_assertions) {
-            // Dev: use desktop-agent source dir, run with tsx
             PathBuf::from("/mnt/d/projects/desktopwork/desktop-agent/src/index.ts")
         } else {
-            // Prod: bundled server is at {exe_dir}/server/dist/index.js
             std::env::current_exe()
                 .map(|p| p.parent().unwrap_or(&p).join("server/dist/index.js"))
                 .unwrap_or_else(|_| PathBuf::from("server/dist/index.js"))
@@ -83,7 +81,6 @@ impl NodeProcess {
 
     async fn start(&self, config: &AgentConfig) -> Result<(), String> {
         let (cmd, args) = config.spawn_cmd();
-
 
         log::info!("Spawning Node: {} {:?}", cmd, args);
 
@@ -167,6 +164,55 @@ fn create_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     Ok(())
 }
 
+// === Loading splash HTML (embedded) ===
+const SPLASH_HTML: &str = r#"<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      width: 100vw; height: 100vh;
+      display: flex; align-items: center; justify-content: center;
+      background: #1a1a2e;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #e0e0e0;
+    }
+    .card {
+      text-align: center;
+      padding: 40px;
+    }
+    .logo {
+      width: 64px; height: 64px;
+      margin: 0 auto 24px;
+      background: #4a90d9;
+      border-radius: 16px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; font-weight: 700; color: #fff;
+    }
+    h2 { font-size: 20px; font-weight: 600; margin-bottom: 8px; color: #fff; }
+    p { font-size: 14px; color: #888; }
+    .spinner {
+      margin: 24px auto 0;
+      width: 32px; height: 32px;
+      border: 3px solid #333;
+      border-top-color: #4a90d9;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">DW</div>
+    <h2>DesktopWork</h2>
+    <p>Starting...</p>
+    <div class="spinner"></div>
+  </div>
+</body>
+</html>"#;
+
 // === Main ===
 
 fn main() {
@@ -176,12 +222,11 @@ fn main() {
     .init();
 
     let config = AgentConfig::from_env();
-    log::info!("DesktopWork Shell starting");
+    log::info!("DesktopWork starting");
     log::info!("  Server entry: {:?}", config.server_entry);
     log::info!("  HTTP port: {}", config.http_port);
     log::info!("  Runner: {}", if config.is_ts_source() { "tsx" } else { "node" });
 
-    // Extract values before builder chain
     let server_entry = config.server_entry.clone();
     let http_port = config.http_port;
     let base_url = config.base_url();
@@ -198,39 +243,50 @@ fn main() {
         })
         .setup(move |app| {
             let handle = app.app_handle().clone();
-            let handle_for_window = handle.clone();
             let entry = server_entry;
             let node_proc = node_process_for_async;
-
-            // Config object to pass into async block
             let agent_config = AgentConfig {
                 server_entry: entry,
                 http_port,
             };
 
+            // Step 1: Create window IMMEDIATELY with embedded splash HTML.
+            // This prevents the black OS window from showing.
+            // data URL loads instantly without any network request.
+            let splash_url = format!("data:text/html,{}", urlencoding::encode(SPLASH_HTML));
+            let window = WebviewWindowBuilder::new(
+                &handle,
+                "main",
+                WebviewUrl::External(splash_url.parse().unwrap()),
+            )
+            .title("DesktopWork")
+            .inner_size(900.0, 700.0)
+            .min_inner_size(600.0, 400.0)
+            .center()
+            .resizable(true)
+            .build()
+            .map_err(|e| format!("Failed to create window: {}", e))?;
+
+            // Step 2: Start Node HTTP server in background, then navigate
             tauri::async_runtime::spawn(async move {
+                // Start Node process
                 if let Err(e) = node_proc.start(&agent_config).await {
                     log::error!("Failed to start Node process: {}", e);
-                    std::process::exit(1);
+                    // Show error in the webview
+                    let _ = window.eval(&format!(
+                        "document.body.innerHTML = '<div style=\"padding:40px;font-family:sans-serif;color:#e74c3c;\"><h2>Failed to start server</h2><p>{}</p></div>'",
+                        e
+                    ));
+                    return;
                 }
 
-                let base_url = node_proc.base_url.clone();
-                let window = WebviewWindowBuilder::new(
-                    &handle_for_window,
-                    "main",
-                    WebviewUrl::External(base_url.parse().unwrap()),
-                )
-                .title("DesktopWork")
-                .inner_size(900.0, 700.0)
-                .min_inner_size(600.0, 400.0)
-                .resizable(true)
-                .build();
-
-                if let Err(e) = window {
-                    log::error!("Failed to create window: {}", e);
-                    std::process::exit(1);
+                // Step 3: Node is ready — navigate to the actual app
+                let navigate_js = format!("window.location.href = '{}';", node_proc.base_url);
+                if let Err(e) = window.eval(&navigate_js) {
+                    log::error!("Failed to navigate to app: {}", e);
                 }
-                let window = window.unwrap();
+
+                // Set up close handler after window is ready
                 let node_proc2 = Arc::clone(&node_proc);
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { .. } = event {

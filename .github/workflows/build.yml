@@ -48,12 +48,14 @@ jobs:
       # Copy server files into shell/src-tauri/ for bundling
       # At runtime these will be in the same dir as the .exe
       # node_modules/@openclaw/ is included (symlinks resolved by xcopy)
+      # package.json is included for reference but node_modules is self-contained
       - name: Copy server bundle
         run: |
           mkdir shell\src-tauri\server
           xcopy /E /I /Y desktop-agent\dist shell\src-tauri\server\dist
           xcopy /E /I /Y desktop-agent\apps shell\src-tauri\server\apps
           xcopy /E /I /Y desktop-agent\node_modules shell\src-tauri\server\node_modules
+          copy desktop-agent\package.json shell\src-tauri\server\package.json
         working-directory: .
 
       - name: Build Tauri (Windows)
@@ -106,6 +108,7 @@ jobs:
           cp -R desktop-agent/dist/* shell/src-tauri/server/dist/
           cp -R desktop-agent/apps/* shell/src-tauri/server/apps/
           cp -R desktop-agent/node_modules/* shell/src-tauri/server/node_modules/
+          cp desktop-agent/package.json shell/src-tauri/server/package.json
         working-directory: .
 
       - name: Build Tauri (macOS)

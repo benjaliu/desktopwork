@@ -62,23 +62,25 @@ async function appendMessage(sessionKey: string, msg: AgentMessage): Promise<voi
 
 const DEFAULT_MAX_TOKENS = 4096;
 
-function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
+function buildStreamFn(baseUrl: string, apiKey: string) {
   const resolvedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
   const isAnthropic = resolvedBaseUrl.includes('anthropic') || resolvedBaseUrl.includes('.anthropic');
 
   return async function streamSimple(
-    messages: any[],
-    options: { signal?: AbortSignal; headers?: Record<string, string> } = {}
+    _model: any,  // model passed by agentLoop (overrides closure model if used)
+    _ctx: { messages: any[]; signal?: AbortSignal } = { messages: [] }
   ): Promise<EventStream> {
+    // Use model from _model (passed by agentLoop), not from closure
+    const modelId = typeof _model === 'string' ? _model : (_model?.id || String(_model));
+    const messages = _ctx.messages;
     const controller = new AbortController();
-    if (options.signal) {
-      options.signal.addEventListener('abort', () => controller.abort());
+    if (_ctx.signal) {
+      _ctx.signal.addEventListener('abort', () => controller.abort());
     }
 
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      ...(options.headers || {}),
     };
 
     const fetchOptions: RequestInit = { method: 'POST', headers, signal: controller.signal as any };
@@ -89,7 +91,7 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
     if (isAnthropic) {
       url = `${resolvedBaseUrl}/messages`;
       body = {
-        model,
+        model: modelId,
         messages: messages.filter((m: any) => m.role !== 'system'),
         system: messages.find((m: any) => m.role === 'system')?.content || '',
         stream: true,
@@ -97,11 +99,12 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
       };
     } else {
       url = `${resolvedBaseUrl}/chat/completions`;
-      body = { model, messages, stream: true };
+      body = { model: modelId, messages, stream: true };
     }
 
     fetchOptions.body = JSON.stringify(body);
 
+    console.error('DEBUG fetch start, body:', fetchOptions.body?.slice(0, 200));
     const response = await fetch(url, fetchOptions);
     if (!response.ok) {
       const err = await response.text();
@@ -110,12 +113,28 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 
     if (!response.body) throw new Error('No response body');
 
-    const stream = new EventStream();
+    const stream = new EventStream(
+      (event) => event.type === 'done' || event.type === 'error',
+      (event) => event.type === 'done' ? event.message : undefined
+    );
+
+    // Emit 'start' first so agentLoop can set partialMessage before text_delta arrives
+    stream.push({
+      type: 'start',
+      partial: {
+        role: 'assistant',
+        content: [],
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+        stopReason: 'unknown',
+        timestamp: Date.now(),
+      },
+    });
 
     async function processStream() {
       const reader = response.body!.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let messageText = '';
 
       try {
         while (true) {
@@ -130,45 +149,33 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
             const trimmed = line.trim();
             if (!trimmed || !trimmed.startsWith('data: ')) continue;
 
+
             const data = trimmed.slice(6).trim();
             if (data === '[DONE]') {
-              stream.end();
-              return;
+              // Will push done below after loop
+              break;
             }
 
             try {
+              console.error('DEBUG raw data:', JSON.stringify(data).slice(0, 100));
               const parsed = JSON.parse(data);
 
               if (isAnthropic) {
                 if (parsed.type === 'content_block_delta') {
                   const delta = parsed.delta?.text || '';
                   if (delta) {
-                    stream.push({
-                      type: 'text_delta',
-                      contentIndex: 0,
-                      delta,
-                      partial: { role: 'assistant', content: delta },
-                    });
+                    messageText += delta;
+                    stream.push({ type: 'text_delta', delta, contentIndex: 0 });
                   }
-                } else if (parsed.type === 'message_delta') {
-                  stream.push({ type: 'done', message: parsed.message });
                 }
               } else {
                 const choice = parsed.choices?.[0];
                 if (!choice) continue;
 
-                if (choice.delta?.content || choice.delta?.delta?.text) {
-                  const delta = choice.delta?.content || choice.delta?.delta?.text || '';
-                  stream.push({
-                    type: 'text_delta',
-                    contentIndex: choice.index || 0,
-                    delta,
-                    partial: { role: 'assistant', content: delta },
-                  });
-                }
 
-                if (choice.finish_reason) {
-                  stream.push({ type: 'done', message: choice.message });
+                               if (choice.delta && 'content' in choice.delta) {
+                  const delta = choice.delta.content;
+                  if (delta) { messageText += delta; stream.push({ type: 'text_delta', delta, contentIndex: choice.index || 0 }); }
                 }
               }
             } catch {
@@ -177,11 +184,22 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
           }
         }
       } finally {
-        if (!stream.done) stream.end();
+        // Push 'done' to resolve the EventStream result — AgentStream completes on agent_end,
+        // not done, so this does not cause double-resolution (done resolves result, end() is no-op)
+        stream.push({
+          type: 'done',
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: messageText }],
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            stopReason: 'stop',
+            timestamp: Date.now(),
+          },
+        });
       }
     }
 
-    processStream().catch((e) => stream.end(e));
+    processStream().catch((e) => stream.push({ type: 'error', message: e.message }));
 
     return stream;
   };
@@ -192,6 +210,21 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 // ---------------------------------------------------------------------------
 
 let agentCore: any = null;
+
+async function getAgentCore() {
+  if (!agentCore) {
+    agentCore = await import('../vendor/bundles/agent-core.esm.js');
+  }
+  return agentCore;
+}
+
+function buildAgentConfig(model: string, apiKey: string) {
+  return {
+    model,
+    convertToLlm: (msgs: any[]) => msgs.map((m) => ({ role: m.role, content: m.content })),
+    getApiKey: async () => apiKey,
+  };
+}
 
 
 
@@ -246,23 +279,22 @@ router.post('/chat', async (req, res) => {
 
   if (!stream) {
     try {
-      const resolvedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
-      const response = await fetch(`${resolvedBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ model, messages: llmMessages, max_tokens: 4096 }),
-      });
-
-      if (!response.ok) {
-        const err = await response.text();
-        return res.status(500).json({ error: `LLM API error ${response.status}: ${err}` });
+      const core = await getAgentCore();
+      const streamFn = buildStreamFn(baseUrl, apiKey);
+      const eventStream = await core.agentLoop(
+        llmMessages,
+        { messages: llmMessages },
+        buildAgentConfig(model, apiKey),
+        undefined,
+        streamFn
+      );
+      for await (const _event of eventStream) {
+        // consume iterator — agentLoop completes when agent_end is emitted
       }
-
-      const data = await response.json();
-      const fullText = data.choices?.[0]?.message?.content || '';
+      const result = await eventStream.result();
+      const finalMsg = Array.isArray(result) ? result[result.length - 1] : result;
+      console.error('DEBUG result:', JSON.stringify(result)?.slice(0, 200));
+      const fullText = finalMsg?.content?.[0]?.text || '';
       const assistantMsg: AgentMessage = {
         id: uuid(),
         role: 'assistant',
@@ -277,7 +309,7 @@ router.post('/chat', async (req, res) => {
     }
   }
 
-  // Streaming: SSE
+  // Streaming: SSE via agentLoop
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -292,82 +324,47 @@ router.post('/chat', async (req, res) => {
 
   (async () => {
     try {
-      const resolvedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
-      const response = await fetch(`${resolvedBaseUrl}/chat/completions`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ model, messages: llmMessages, stream: true }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const err = await response.text();
-        res.write(`data: ${JSON.stringify({ type: 'error', error: `LLM API error ${response.status}` })}\n\n`);
-        res.end();
-        return;
-      }
-
-      if (!response.body) {
-        res.end();
-        return;
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let fullText = '';
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || !trimmed.startsWith('data: ')) continue;
-            const data = trimmed.slice(6).trim();
-            if (data === '[DONE]') break;
-
-            try {
-              const parsed = JSON.parse(data);
-              const delta = parsed.choices?.[0]?.delta?.content;
-              if (delta) {
-                fullText += delta;
-                res.write(`data: ${JSON.stringify({ type: 'text_delta', delta })}\n\n`);
-              }
-            } catch {}
-          }
+      const core = await getAgentCore();
+      const streamFn = buildStreamFn(baseUrl, apiKey);
+      const eventStream = await core.agentLoop(
+        llmMessages,
+        { messages: llmMessages },
+        buildAgentConfig(model, apiKey),
+        controller.signal,
+        streamFn
+      );
+      let lastText = '';
+      for await (const event of eventStream) {
+        if (event.type === 'message_update' && event.message?.content?.[0]?.text) {
+          const fullText = event.message.content[0].text;
+          const delta = fullText.slice(lastText.length);
+          lastText = fullText;
+          res.write(`data: ${JSON.stringify({ type: 'text_delta', delta })}\n\n`);
         }
-      } finally {
-        reader.releaseLock();
+        if (event.type === 'agent_end') {
+          const assistantMsg: AgentMessage = {
+            id: uuid(),
+            role: 'assistant',
+            content: lastText,
+            timestamp: Date.now(),
+          };
+          await appendMessage(sessionKey, userMsg);
+          await appendMessage(sessionKey, assistantMsg);
+                   res.write(`data: ${JSON.stringify({ type: 'message_end', content: lastText })}\n\n`);          res.end();
+          return;
+        }
       }
-
-      const assistantMsg: AgentMessage = {
-        id: uuid(),
-        role: 'assistant',
-        content: fullText,
-        timestamp: Date.now(),
-      };
-      await appendMessage(sessionKey, userMsg);
-      await appendMessage(sessionKey, assistantMsg);
-      res.write(`data: ${JSON.stringify({ type: 'message_end', content: fullText })}\n\n`);
-      res.end();
     } catch (e: any) {
       if (e.name === 'AbortError') {
         res.end();
         return;
       }
-      res.write(`data: ${JSON.stringify({ type: 'error', error: e.message })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: e.message })}
+\n`);
       res.end();
     }
   })();
 });
+
 
 export default router;

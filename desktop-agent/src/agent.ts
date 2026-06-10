@@ -110,9 +110,7 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 
     if (!response.body) throw new Error('No response body');
 
-    const eventQueue: any[] = [];
-    let resolveNext: ((v: IteratorResult<any>) => void) | null = null;
-    let finished = false;
+    const stream = new EventStream();
 
     async function processStream() {
       const reader = response.body!.getReader();
@@ -134,9 +132,7 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 
             const data = trimmed.slice(6).trim();
             if (data === '[DONE]') {
-              finished = true;
-              eventQueue.push({ type: 'done' });
-              resolveNext?.({ value: eventQueue.shift(), done: false });
+              stream.end();
               return;
             }
 
@@ -147,20 +143,15 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
                 if (parsed.type === 'content_block_delta') {
                   const delta = parsed.delta?.text || '';
                   if (delta) {
-                    const event = {
+                    stream.push({
                       type: 'text_delta',
                       contentIndex: 0,
                       delta,
                       partial: { role: 'assistant', content: delta },
-                    };
-                    eventQueue.push(event);
-                    resolveNext?.({ value: eventQueue.shift(), done: false });
-                    resolveNext = null;
+                    });
                   }
                 } else if (parsed.type === 'message_delta') {
-                  eventQueue.push({ type: 'done', message: parsed.message });
-                  resolveNext?.({ value: eventQueue.shift(), done: false });
-                  resolveNext = null;
+                  stream.push({ type: 'done', message: parsed.message });
                 }
               } else {
                 const choice = parsed.choices?.[0];
@@ -168,21 +159,16 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 
                 if (choice.delta?.content || choice.delta?.delta?.text) {
                   const delta = choice.delta?.content || choice.delta?.delta?.text || '';
-                  const event = {
+                  stream.push({
                     type: 'text_delta',
                     contentIndex: choice.index || 0,
                     delta,
                     partial: { role: 'assistant', content: delta },
-                  };
-                  eventQueue.push(event);
-                  resolveNext?.({ value: eventQueue.shift(), done: false });
-                  resolveNext = null;
+                  });
                 }
 
                 if (choice.finish_reason) {
-                  eventQueue.push({ type: 'done', message: choice.message });
-                  resolveNext?.({ value: eventQueue.shift(), done: false });
-                  resolveNext = null;
+                  stream.push({ type: 'done', message: choice.message });
                 }
               }
             } catch {
@@ -191,27 +177,13 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
           }
         }
       } finally {
-        finished = true;
-        resolveNext?.({ value: undefined, done: true });
+        if (!stream.done) stream.end();
       }
     }
 
-    processStream().catch(() => {});
+    processStream().catch((e) => stream.end(e));
 
-    return {
-      async next() {
-        if (eventQueue.length > 0) {
-          return { value: eventQueue.shift()!, done: false };
-        }
-        if (finished) return { value: undefined, done: true };
-        return new Promise<IteratorResult<any>>((resolve) => {
-          resolveNext = resolve;
-        });
-      },
-      return() { controller.abort(); return Promise.resolve({ value: undefined, done: true }); },
-      throw(e) { controller.abort(); return Promise.reject(e); },
-      [Symbol.asyncIterator]() { return this; },
-    } as unknown as EventStream;
+    return stream;
   };
 }
 
@@ -221,12 +193,7 @@ function buildStreamFn(baseUrl: string, apiKey: string, model: string) {
 
 let agentCore: any = null;
 
-async function getAgentCore() {
-  if (!agentCore) {
-    agentCore = await import('../vendor/bundles/agent-core.esm.js');
-  }
-  return agentCore;
-}
+
 
 // ---------------------------------------------------------------------------
 // POST /agent/chat
@@ -278,17 +245,24 @@ router.post('/chat', async (req, res) => {
   ];
 
   if (!stream) {
-    const streamFn = buildStreamFn(baseUrl, apiKey, model);
     try {
-      const core = await getAgentCore();
-      const agentLoop = core.agentLoop;
-      const stream2 = await agentLoop(llmMessages, {}, { model, streamFn });
-      let fullText = '';
-      for await (const event of stream2) {
-        if (event.type === 'text_delta') {
-          fullText += event.delta;
-        }
+      const resolvedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
+      const response = await fetch(`${resolvedBaseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model, messages: llmMessages, max_tokens: 4096 }),
+      });
+
+      if (!response.ok) {
+        const err = await response.text();
+        return res.status(500).json({ error: `LLM API error ${response.status}: ${err}` });
       }
+
+      const data = await response.json();
+      const fullText = data.choices?.[0]?.message?.content || '';
       const assistantMsg: AgentMessage = {
         id: uuid(),
         role: 'assistant',
@@ -309,7 +283,6 @@ router.post('/chat', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const streamFn = buildStreamFn(baseUrl, apiKey, model);
   const controller = new AbortController();
 
   req.on('close', () => {
@@ -319,31 +292,73 @@ router.post('/chat', async (req, res) => {
 
   (async () => {
     try {
-      const core = await getAgentCore();
-      const agentLoop = core.agentLoop;
-      const eventStream = await agentLoop(llmMessages, {}, { model, streamFn, signal: controller.signal });
+      const resolvedBaseUrl = baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl}/v1`;
+      const response = await fetch(`${resolvedBaseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ model, messages: llmMessages, stream: true }),
+        signal: controller.signal,
+      });
 
+      if (!response.ok) {
+        const err = await response.text();
+        res.write(`data: ${JSON.stringify({ type: 'error', error: `LLM API error ${response.status}` })}\n\n`);
+        res.end();
+        return;
+      }
+
+      if (!response.body) {
+        res.end();
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
       let fullText = '';
 
-      for await (const event of eventStream) {
-        if (event.type === 'text_delta') {
-          fullText += event.delta;
-          res.write(`data: ${JSON.stringify({ type: 'text_delta', delta: event.delta })}\n\n`);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed || !trimmed.startsWith('data: ')) continue;
+            const data = trimmed.slice(6).trim();
+            if (data === '[DONE]') break;
+
+            try {
+              const parsed = JSON.parse(data);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                fullText += delta;
+                res.write(`data: ${JSON.stringify({ type: 'text_delta', delta })}\n\n`);
+              }
+            } catch {}
+          }
         }
-        if (event.type === 'done') {
-          const assistantMsg: AgentMessage = {
-            id: uuid(),
-            role: 'assistant',
-            content: fullText,
-            timestamp: Date.now(),
-          };
-          await appendMessage(sessionKey, userMsg);
-          await appendMessage(sessionKey, assistantMsg);
-          res.write(`data: ${JSON.stringify({ type: 'message_end', content: fullText })}\n\n`);
-          res.end();
-          return;
-        }
+      } finally {
+        reader.releaseLock();
       }
+
+      const assistantMsg: AgentMessage = {
+        id: uuid(),
+        role: 'assistant',
+        content: fullText,
+        timestamp: Date.now(),
+      };
+      await appendMessage(sessionKey, userMsg);
+      await appendMessage(sessionKey, assistantMsg);
+      res.write(`data: ${JSON.stringify({ type: 'message_end', content: fullText })}\n\n`);
+      res.end();
     } catch (e: any) {
       if (e.name === 'AbortError') {
         res.end();

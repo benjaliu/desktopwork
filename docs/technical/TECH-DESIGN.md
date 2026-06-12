@@ -760,7 +760,18 @@ export function buildEnv(cfg: DesktopWorkConfig): Record<string, string | undefi
 
 ### 5.4 认证（`src/platform/auth.ts`）
 
-**无变化**。MVP 简化方案：token + 本地端口。
+**实现**：HMAC-SHA256 简化 token 方案。
+
+**登录流程**：
+1. 客户端 POST `/auth/login` → `{ "username": "admin", "password": "***" }`
+2. 服务端验证 `PLATFORM_ADMIN_PASSWORD`（环境变量或配置文件）
+3. 返回 `{ "token": "***" }`
+4. 后续所有请求带 `X-Desktop-Work-Token: <token>` 头
+
+**安全说明**：
+- token 本质是 HMAC-SHA256(password, timestamp)，非 JWT
+- 仅限本地端口访问（127.0.0.1），攻击面极小
+- v0.2 可升级为 proper JWT + keytar 加密存储
 
 ### 5.5 存储（`src/platform/storage.ts`）
 
@@ -1044,6 +1055,7 @@ export const CONFIG_PATH  = join(CONFIG_DIR, 'config.json');
 | PUT | `/api/platform/skills/:id` | ⚠️ v0.1 返 501 |
 | GET | `/api/platform/memory` | ⚠️ v0.1 返 501；v0.4+ 引入知识库 |
 | GET | `/api/platform/health` | 健康检查（含 Claude subprocess 状态） |
+| POST | `/auth/login` | 登录（获取 token） |
 
 ### 6.2 Bot Chat API（MVP 核心）
 

@@ -4,6 +4,7 @@ import cors from 'cors';
 import { authMiddleware, generateToken } from './platform/auth.js';
 import { loadConfig, updateConfig } from './platform/config.js';
 import { listApps, getApp } from './platform/app-registry.js';
+import { createBotChatRouter } from './apps/bot-chat/routes.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -76,6 +77,9 @@ export function createRouter(): express.Express {
   app.get('/api/platform/memory', (_req, res) => {
     res.status(501).json({ error: 'not_implemented', message: 'v0.4+' });
   });
+
+  // Bot Chat App routes
+  app.use('/api/bot-chat', createBotChatRouter());
 
   // Static files (App frontends)
   // Dev: <repo>/apps; Prod: APPS_DIR env var

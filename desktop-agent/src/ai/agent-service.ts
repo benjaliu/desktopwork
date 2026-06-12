@@ -1,10 +1,11 @@
 // src/ai/agent-service.ts
 import { query, type Options, type Query } from '@anthropic-ai/claude-agent-sdk';
-import { getWarmQuery } from './startup-warmer.js';
+import { getWarmQuery, invalidateWarmQuery } from './startup-warmer.js';
 import { loadConfig } from '../platform/config.js';
 import { RUNTIME_DIR } from '../platform/paths.js';
 import { convertSDKMessage } from './event-converter.js';
 import type { AgentStreamEvent, AgentCallOptions } from './types.js';
+import type { DesktopWorkConfig } from '../platform/types.js';
 
 /**
  * Unified platform cwd: used for SDK subprocess startup and session queries.
@@ -21,9 +22,11 @@ const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Bash', 'Grep', 'Glob'];
  * KEY: SDK comment: `env` REPLACES the subprocess environment entirely.
  * Must spread `...process.env` so subprocess doesn't miss PATH / HOME etc.
  */
-export function buildEnv(): Record<string, string> {
+export function buildEnv(cfg: DesktopWorkConfig): Record<string, string | undefined> {
   return {
     ...process.env as Record<string, string>,
+    ANTHROPIC_BASE_URL: cfg.agent.baseUrl || undefined,
+    ANTHROPIC_AUTH_TOKEN: cfg.agent.apiKey || undefined,
     CLAUDE_AGENT_SDK_CLIENT_APP: 'desktopwork/0.1.0',
     DISABLE_TELEMETRY: '1',
     NODE_NO_WARNINGS: '1',
@@ -39,7 +42,7 @@ export class AgentService {
    */
   async *stream(opts: AgentCallOptions): AsyncGenerator<AgentStreamEvent> {
     const cfg = await loadConfig();
-    const env = buildEnv();
+    const env = buildEnv(cfg);
 
     const options: Options = {
       model: cfg.agent.model,
@@ -54,11 +57,19 @@ export class AgentService {
       abortController: opts.abortSignal ? toAbortController(opts.abortSignal) : undefined,
     };
 
-    // Prefer warm query
+    // Prefer warm query (valid for one use only — WarmQuery.query() can only be called once)
     const warm = getWarmQuery();
     const q: Query = warm
       ? warm.query(opts.prompt)
       : query({ prompt: opts.prompt, options });
+
+    // Invalidate warm query so subsequent calls don't try to reuse an exhausted WarmQuery.
+    // After warm.query() is called, the same WarmQuery instance cannot be used again.
+    // Next call will go through query() which still benefits from the prewarmed subprocess reuse.
+    if (warm) {
+      // Don't await — fire and forget; next request will recreate via query()
+      invalidateWarmQuery();
+    }
 
     try {
       for await (const msg of q) {

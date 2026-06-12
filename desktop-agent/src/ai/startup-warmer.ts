@@ -1,6 +1,7 @@
 // src/ai/startup-warmer.ts
 import { startup, type WarmQuery } from '@anthropic-ai/claude-agent-sdk';
 import { mkdirSync } from 'node:fs';
+import { loadConfig } from '../platform/config.js';
 import type { DesktopWorkConfig } from '../platform/types.js';
 import { buildEnv, PLATFORM_CWD } from './agent-service.js';
 
@@ -16,10 +17,13 @@ export async function prewarmClaude(_cfg: DesktopWorkConfig): Promise<void> {
     // ★ SDK subprocess 要求 cwd 已存在（否则 "exists but failed to launch"）
     mkdirSync(PLATFORM_CWD, { recursive: true });
 
+    // 重新读最新 config（hot-update）以拿到最新的 token/baseUrl
+    const cfg = await loadConfig();
+
     warm = await startup({
       options: {
         cwd: PLATFORM_CWD,
-        env: buildEnv(),
+        env: buildEnv(cfg),
       },
       initializeTimeoutMs: 30_000,
     });

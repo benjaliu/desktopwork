@@ -1,0 +1,1096 @@
+# DesktopWork 技术设计文档
+
+> Last updated: 2026-06-11
+> Status: Draft
+> 配套产品文档：docs/product/PRD-DESKTOPWORK.md
+
+---
+
+## 一、文档目的与范围
+
+### 1.1 目的
+
+本文档是 DesktopWork 项目的技术设计文档，配套产品文档（PRD-DESKTOPWORK.md）使用。产品文档描述「做什么」，本文档描述「怎么做」。
+
+### 1.2 范围
+
+- Platform 进程（Node.js）的架构与实现
+- Tauri（Rust）与 Platform 进程的协作
+- Claude Code Agent SDK 集成方式
+- App 容器模型与目录结构
+- MVP（v0.1）的实施路径
+
+### 1.3 不在本文档范围
+
+- Tauri 前端 UI 的具体设计
+- 第三方 App 集成机制（v0.5+ 再考虑）
+- 商业化策略
+
+---
+
+## 二、架构总览
+
+### 2.1 架构目标
+
+| 目标 | 描述 |
+|------|------|
+| **进程解耦** | Tauri 只做窗口和原生能力，业务逻辑全在 Platform 进程 |
+| **单一入口** | Platform 进程作为业务后端，前端通过 HTTP 调用 |
+| **可扩展** | 新增 App 不需要改 Platform 主框架 |
+| **本地优先** | 所有数据本地存储，AI 调用走用户配置的 API |
+| **轻量引擎** | 不自建 AI runtime，直接封装 Claude Code Agent SDK |
+
+### 2.2 整体架构
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Tauri App（Rust 进程）                                       │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  React Frontend（WebView 内）                          │  │
+│  │                                                        │  │
+│  │  Workbench UI                                          │  │
+│  │  ├── Sidebar  (App List)                              │  │
+│  │  └── App Area  (渲染当前 App 的 UI)                    │  │
+│  │                                                        │  │
+│  │  Platform API Client                                   │  │
+│  │  └── fetch('/api/...')                                │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  Tauri 职责：                                                │
+│  - 窗口管理（标题、大小、最小化、关闭）                        │
+│  - 系统托盘                                                  │
+│  - 原生对话框（文件选择、消息框）                              │
+│  - 系统通知                                                  │
+│  - spawn + 管理 Platform 进程                                │
+│  - 自动启动（开机自启）                                       │
+└──────────────────────────────────────────────────────────────┘
+       │ HTTP localhost:3737
+       │ SSE 流式响应
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Platform 进程（Node.js）                                     │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  HTTP Server（Express）                                 │  │
+│  │  ├── Platform API  /api/...                            │  │
+│  │  └── App API      /api/:appId/...                      │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  Platform Core（主框架）                                │  │
+│  │  ├── App Registry     — App 注册与路由分发             │  │
+│  │  ├── Config Manager   — 全局配置管理                   │  │
+│  │  ├── Auth             — 统一认证                       │  │
+│  │  ├── Storage          — 数据存储抽象                   │  │
+│  │  └── Skills Runtime   — Skills 加载与执行              │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  AI Layer（Claude Code Agent SDK 封装）                 │  │
+│  │  ├── agent-service    — Claude Code SDK 包装            │  │
+│  │  ├── session-store    — 会话存储（JSONL）                │  │
+│  │  └── tool-bridge      — 工具调用桥接                    │  │
+│  └────────────────────────────────────────────────────────┘  │
+│                                                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  Apps（独立模块）                                        │  │
+│  │  ├── bot-chat/        — Bot Chat 后端                  │  │
+│  │  └── ...                                               │  │
+│  └────────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────────┘
+       │ HTTPS（用户配置的 API Key / Base URL）
+       ▼
+┌──────────────────────────────────────────────────────────────┐
+│  LLM Provider（外部，由用户配置）                             │
+│  Anthropic / OpenAI / 任意兼容 Anthropic Messages 协议的     │
+│  服务（通过 ANTHROPIC_BASE_URL 配置）                         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 2.3 核心决策
+
+| 决策 | 选择 | 原因 |
+|------|------|------|
+| AI Agent 引擎 | **Claude Code Agent SDK** | 官方维护、能力完整、支持第三方模型、无需 gateway |
+| AI 调用方式 | **In-process SDK** | 直接 `import` 包的 TypeScript API，无 subprocess 开销 |
+| 第三方模型支持 | **ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN** | Claude Code 内置支持 |
+| HTTP 框架 | **Express** | 轻量、成熟、Node.js 首选 |
+| 前端框架 | **React 19 + Vite + TypeScript** | Tauri 官方推荐栈 |
+| 桌面框架 | **Tauri 2.0** | 轻量、跨平台、安全 |
+
+---
+
+## 三、Claude Code Agent SDK 集成
+
+### 3.1 Claude Code 简介
+
+Claude Code 是 Anthropic 官方的 AI Agent CLI 工具，提供：
+
+- ✅ 完整 Agent 能力（推理、工具调用、多轮对话）
+- ✅ 内置工具集（Read、Write、Edit、Bash、Grep、Glob、Web 搜索等）
+- ✅ 会话管理（持久化、resume、continue）
+- ✅ 流式响应（stream-json 格式）
+- ✅ MCP 协议扩展
+- ✅ 第三方模型支持（ANTHROPIC_BASE_URL 环境变量）
+
+### 3.2 集成方式
+
+Claude Code 提供三种集成方式：
+
+| 方式 | 描述 | 适合 DesktopWork？ |
+|------|------|-------------------|
+| **A. CLI 子进程** | `spawn('claude', ['-p', msg])` | ❌ 进程隔离但开销大 |
+| **B. TypeScript Agent SDK** | 直接 `import` 包，in-process 调用 | ✅ **首选** |
+| **C. CLI + MCP 配置** | 用 MCP 协议扩展 | 部分场景（v0.2+） |
+
+**MVP 选择 B：TypeScript Agent SDK。**
+
+### 3.3 第三方模型配置
+
+Claude Code 支持通过环境变量配置自定义 LLM：
+
+```bash
+# Anthropic 兼容协议
+export ANTHROPIC_BASE_URL=https://your-provider.com
+export ANTHROPIC_AUTH_TOKEN=sk-***
+
+# OpenAI 兼容协议（需要 LiteLLM 等网关翻译）
+export ANTHROPIC_BASE_URL=http://localhost:4000
+export ANTHROPIC_AUTH_TOKEN=***
+```
+
+**对用户的影响：**
+- 用户可在 DesktopWork 设置界面配置 API URL 和 Key
+- Platform 进程启动时设置环境变量后再调用 Claude Code SDK
+- 不强制登录 Anthropic 账户
+
+### 3.4 SDK API 概览
+
+```typescript
+import { query, type Options } from '@anthropic-ai/claude-code';
+
+// 简单调用
+for await (const message of query({
+  prompt: '用户消息',
+  options: {
+    model: 'claude-sonnet-4-6',
+    systemPrompt: 'You are a helpful assistant...',
+    allowedTools: ['Read', 'Edit', 'Bash'],
+  }
+})) {
+  // message 类型：user / assistant / system / result
+  console.log(message);
+}
+
+// 多轮对话（续接 session）
+for await (const message of query({
+  prompt: '继续',
+  options: {
+    resume: sessionId,  // 传入上一次的 session_id
+  }
+})) {
+  console.log(message);
+}
+```
+
+### 3.5 Claude Code Agent SDK 优势
+
+Claude Code Agent SDK 相对其他方案的独特价值：
+
+| 维度 | 价值 |
+|------|------|
+| 官方维护 | Anthropic 持续更新，能力随 Claude 模型同步进化 |
+| Agent Loop 内置 | 推理、工具调用、多轮对话开箱即用 |
+| 内置工具集 | Read/Edit/Bash/Grep/Glob 等文件、终端、搜索能力 |
+| Session 管理 | SDK 内置持久化、resume、continue |
+| 第三方模型 | ANTHROPIC_BASE_URL 环境变量配置即可，不需多个 provider 包 |
+| 打包简洁 | 一个 npm 包包含所有依赖 |
+| 最新模型 | 新模型发布后自动获得，无需手动集成 |
+
+---
+
+## 四、目录结构
+
+### 4.1 项目仓库结构
+
+```
+desktopwork/                          # 仓库根
+├── docs/                             # 文档
+│   ├── product/                      # 产品文档
+│   │   └── PRD-DESKTOPWORK.md
+│   └── technical/                    # 技术文档
+│       └── TECH-DESIGN.md            # 本文件
+│
+├── src-tauri/                        # Tauri 主进程（Rust + React 前端）
+│   ├── src/                          # Rust 源码
+│   ├── App/                          # React 前端源码
+│   │   ├── pages/                    # 各 App 页面（React 组件）
+│   │   ├── components/               # 共享组件
+│   │   └── lib/                      # 工具库
+│   ├── package.json                  # 前端 npm 配置
+│   └── tauri.conf.json
+│
+├── desktop-agent/                    # Platform 进程（Node.js）★
+│   ├── src/                          # 主框架源码
+│   │   ├── index.ts                  # 入口（启动 HTTP server）
+│   │   ├── router.ts                 # 路由总入口
+│   │   │
+│   │   ├── platform/                 # 平台核心模块
+│   │   │   ├── app-registry.ts       # App 注册表
+│   │   │   ├── config.ts             # 全局配置管理
+│   │   │   ├── auth.ts               # 统一认证
+│   │   │   ├── storage.ts            # 存储抽象
+│   │   │   ├── skills.ts             # Skills 加载
+│   │   │   ├── ipc.ts                # 与 Tauri 通信
+│   │   │   └── types.ts              # 共享类型
+│   │   │
+│   │   ├── ai/                       # AI 层（Claude Code SDK 封装）
+│   │   │   ├── agent-service.ts      # Claude Code Agent SDK 包装
+│   │   │   ├── session-store.ts      # 会话存储（JSONL）
+│   │   │   └── tool-bridge.ts        # 工具调用桥接
+│   │   │
+│   │   └── apps/                     # 各 App 后端代码
+│   │       ├── bot-chat/
+│   │       │   ├── routes.ts         # Express routes
+│   │       │   └── service.ts        # 业务逻辑
+│   │       └── settings/
+│   │           ├── routes.ts
+│   │           └── service.ts
+│   │
+│   ├── apps/                         # 各 App 前端静态文件（HTML/JS）
+│   │   ├── _shared/                  # 共享 CSS/JS
+│   │   ├── bot-chat/
+│   │   │   └── index.html
+│   │   └── settings/
+│   │       └── index.html
+│   │
+│   ├── package.json                  # 包含 @anthropic-ai/claude-code
+│   └── tsconfig.json
+│
+├── .github/
+│   └── workflows/
+│       └── build.yml                 # CI 配置
+│
+├── package.json                      # 根 package.json（pnpm workspace）
+├── pnpm-workspace.yaml
+└── README.md
+```
+
+### 4.2 关键说明
+
+**为什么 `src/apps/` 和 `apps/` 同时存在？**
+
+| 目录 | 内容 | 角色 |
+|------|------|------|
+| `desktop-agent/src/apps/:id/` | App 的**后端**代码（Express routes、业务逻辑） | 平台进程内运行 |
+| `desktop-agent/apps/:id/` | App 的**前端**静态文件（HTML/JS） | 由 Express static 提供给浏览器 |
+
+每个 App 同时拥有后端模块和前端目录。`src-tauri/App/pages/:id/` 是 Tauri's 渲染的 React 页面，但 MVP 阶段也可以直接用 `desktop-agent/apps/:id/index.html` 作为最小可行的前端。
+
+**MVP（v0.1）阶段简化：**
+
+为了快速实现 MVP，可以暂时只用 `desktop-agent/apps/:id/index.html` 作为前端（直接由 Express 提供），不用在 `src-tauri/App/` 下重复实现。后续 v0.3+ 切换到 Tauri 内 React 渲染。
+
+### 4.3 运行时用户数据目录
+
+```
+~/.config/desktopwork/                # 配置（Linux/macOS）
+%APPDATA%\desktopwork\                # 配置（Windows）
+├── config.json                       # 主配置（含 ANTHROPIC_BASE_URL/AUTH_TOKEN）
+├── skills/                           # 用户级 Skills
+│   └── [skill-id]/
+│       ├── manifest.json
+│       └── ...
+└── apps/                             # 用户安装的 App（v0.5+）
+    └── [app-id]/
+        ├── manifest.json
+        └── ...
+
+~/.local/share/desktopwork/           # 数据（Linux/macOS）
+%LOCALAPPDATA%\desktopwork\           # 数据（Windows）
+├── sessions/                         # Session 历史（JSONL）
+├── memory/                           # 知识库（向量 + 元数据）
+├── app-data/                         # 各 App 状态数据
+│   └── [app-id]/
+└── logs/                             # 日志
+    ├── desktop-agent.log
+    └── tauri.log
+```
+
+---
+
+## 五、核心模块设计
+
+### 5.1 入口与路由（`src/index.ts` + `src/router.ts`）
+
+**入口 `index.ts` 职责：**
+
+```typescript
+// 伪代码
+import { createPlatform } from './platform/index.js';
+import { createAppRegistry } from './platform/app-registry.js';
+import { botChatApp } from './apps/bot-chat/index.js';
+import { settingsApp } from './apps/settings/index.js';
+import { loadConfig } from './platform/config.js';
+
+const config = loadConfig();
+const platform = createPlatform(config);
+const registry = createAppRegistry(platform);
+
+// 注册内置 App
+registry.register(botChatApp);
+registry.register(settingsApp);
+
+const app = createRouter({ platform, registry });
+app.listen(config.port, config.host);
+```
+
+**路由结构：**
+
+```
+/api/platform/*       — 平台 API（所有 App 共享）
+  /api/platform/config
+  /api/platform/memory
+  /api/platform/skills
+  /api/platform/apps
+
+/api/:appId/*         — 各 App 自己的 API
+  /api/bot-chat/chat        — 流式对话
+  /api/bot-chat/sessions
+  /api/settings/*
+
+/apps/:appId/         — 各 App 的前端静态文件
+  /apps/bot-chat/index.html
+  /apps/settings/index.html
+```
+
+### 5.2 App 注册表（`src/platform/app-registry.ts`）
+
+**App 接口定义：**
+
+```typescript
+interface AppManifest {
+  id: string;                   // 'bot-chat'
+  name: string;                 // 'Bot Chat'
+  version: string;
+  icon?: string;                // 图标 URL
+  defaultRoute: string;         // '/'
+  permissions: string[];        // 平台权限
+}
+
+interface AppModule {
+  manifest: AppManifest;
+  routes: Router;               // Express Router
+  staticPath?: string;          // 前端静态文件目录
+  initialize?(platform: Platform): Promise<void>;
+  shutdown?(): Promise<void>;
+}
+```
+
+**注册表行为：**
+
+```typescript
+class AppRegistry {
+  register(app: AppModule): void;
+  unregister(appId: string): void;
+  get(appId: string): AppModule | undefined;
+  list(): AppManifest[];
+  
+  // 路由挂载
+  mountApi(app: Express): void {
+    for (const app of this.apps.values()) {
+      app.use(`/api/${app.manifest.id}`, app.routes);
+    }
+  }
+  
+  mountStatic(app: Express): void {
+    for (const app of this.apps.values()) {
+      if (app.staticPath) {
+        app.use(`/apps/${app.manifest.id}`, express.static(app.staticPath));
+      }
+    }
+  }
+}
+```
+
+### 5.3 配置管理（`src/platform/config.ts`）
+
+**职责：**
+
+- 从 `~/.config/desktopwork/config.json` 加载配置
+- 内存中维护配置对象
+- 提供 `get()` / `set()` 接口
+- 写回磁盘
+
+**配置结构：**
+
+```typescript
+interface DesktopWorkConfig {
+  llm: {
+    provider: 'anthropic' | 'openai' | 'custom';
+    model: string;
+    apiKey: string;             // 加密存储（v0.2+）
+    baseUrl?: string;           // 自定义 API URL
+  };
+  system: {
+    port: number;               // 默认 3737
+    host: string;               // 默认 0.0.0.0
+    dataDir: string;            // 数据目录
+    autoStart: boolean;
+  };
+  enabledSkills: string[];      // 启用的 Skill ID 列表
+  enabledApps: string[];        // 启用的 App ID 列表
+}
+```
+
+**LLM 配置映射到 Claude Code 环境变量：**
+
+```typescript
+// platform/config.ts
+function applyLlmConfigToEnv(config: DesktopWorkConfig) {
+  if (config.llm.baseUrl) {
+    process.env.ANTHROPIC_BASE_URL = config.llm.baseUrl;
+  }
+  if (config.llm.apiKey) {
+    process.env.ANTHROPIC_AUTH_TOKEN = config.llm.apiKey;
+  }
+}
+```
+
+### 5.4 认证（`src/platform/auth.ts`）
+
+**MVP 简化方案：**
+
+由于 MVP 是单机本地应用，认证主要是「保护 API 端点不被其他本地进程误调」。
+
+**实现：**
+
+```typescript
+// 简单 token 认证
+const authToken = generateToken();
+app.use('/api', (req, res, next) => {
+  if (req.headers['x-desktop-work-token'] !== authToken) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+});
+```
+
+Token 在启动时生成，写入 `config.json`，Tauri 启动 Platform 进程时从配置中读取并放入请求头。
+
+**未来扩展（v0.3+）：**
+
+- 支持多个用户
+- App 级别的权限控制
+- 外部 App 的 OAuth 2.0 接入
+
+### 5.5 存储（`src/platform/storage.ts`）
+
+**存储抽象：**
+
+```typescript
+interface Storage {
+  readFile(path: string): Promise<string>;
+  writeFile(path: string, content: string): Promise<void>;
+  appendFile(path: string, content: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
+  listDir(path: string): Promise<string[]>;
+}
+```
+
+**MVP 实现：** 直接用 `node:fs/promises`。后续可以替换为 SQLite 或向量数据库。
+
+**Session 存储格式（JSONL）：**
+
+```jsonl
+{"id":"m1","role":"user","content":"你好","timestamp":1234567890}
+{"id":"m2","role":"assistant","content":"你好！","timestamp":1234567891}
+```
+
+### 5.6 AI 层（Claude Code SDK 封装）
+
+#### 5.6.1 AgentService（`src/ai/agent-service.ts`）
+
+**核心职责：封装 Claude Code Agent SDK，对外提供统一的 Agent 调用接口。**
+
+```typescript
+import { query, type Options } from '@anthropic-ai/claude-code';
+import type { AgentMessage, AgentStreamEvent } from './types.js';
+
+export interface AgentCallOptions {
+  prompt: string;
+  sessionId?: string;              // 多轮对话时传入
+  systemPrompt?: string;
+  allowedTools?: string[];         // ['Read', 'Edit', 'Bash', ...]
+  model?: string;
+  abortSignal?: AbortSignal;
+}
+
+export class AgentService {
+  /** 流式调用 Agent */
+  async *stream(options: AgentCallOptions): AsyncGenerator<AgentStreamEvent> {
+    const opts: Options = {
+      model: options.model ?? 'claude-sonnet-4-6',
+      systemPrompt: options.systemPrompt,
+      allowedTools: options.allowedTools ?? ['Read', 'Edit', 'Bash', 'Grep', 'Glob'],
+      resume: options.sessionId,  // 续接会话
+    };
+
+    for await (const message of query({
+      prompt: options.prompt,
+      options: opts,
+    }, { signal: options.abortSignal })) {
+      // 转换 SDK 消息为统一事件格式
+      yield this.convertToStreamEvent(message);
+    }
+  }
+
+  /** 非流式调用（返回完整结果） */
+  async call(options: AgentCallOptions): Promise<AgentMessage> {
+    let lastMessage: AgentMessage | null = null;
+    for await (const event of this.stream(options)) {
+      if (event.type === 'message_end') {
+        lastMessage = event.message;
+      }
+    }
+    if (!lastMessage) throw new Error('No message received');
+    return lastMessage;
+  }
+
+  private convertToStreamEvent(sdkMessage: any): AgentStreamEvent {
+    // 转换 SDK 消息格式到平台统一事件格式
+    // ... 类型映射
+  }
+}
+```
+
+**统一事件类型：**
+
+```typescript
+type AgentStreamEvent =
+  | { type: 'message_start'; message: AgentMessage }
+  | { type: 'text_delta'; delta: string; contentIndex: number }
+  | { type: 'tool_use'; id: string; name: string; args: unknown }
+  | { type: 'tool_result'; id: string; result: unknown }
+  | { type: 'message_end'; message: AgentMessage; sessionId: string };
+```
+
+#### 5.6.2 SessionStore（`src/ai/session-store.ts`）
+
+**职责：管理与 Agent 会话相关的本地状态。**
+
+```typescript
+import { readFile, appendFile, existsSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+
+export class SessionStore {
+  /** 获取会话历史 */
+  async getMessages(sessionKey: string): Promise<AgentMessage[]> {
+    const file = this.getFilePath(sessionKey);
+    if (!existsSync(file)) return [];
+    const raw = await readFile(file, 'utf-8');
+    return raw.trim().split('\n').filter(Boolean).map(JSON.parse);
+  }
+
+  /** 追加消息 */
+  async appendMessage(sessionKey: string, message: AgentMessage): Promise<void> {
+    const file = this.getFilePath(sessionKey);
+    const dir = dirname(file);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    await appendFile(file, JSON.stringify(message) + '\n');
+  }
+
+  private getFilePath(sessionKey: string): string {
+    return join(this.dataDir, 'sessions', `${sessionKey}.jsonl`);
+  }
+}
+```
+
+**注意：** Claude Code SDK 自带 session 管理（`session_id`），用于续接多轮对话。我们本地存储的是「平台视角」的会话历史（用于 UI 显示和回溯），SDK 内部 session 由 Claude Code 自己管理。
+
+### 5.7 Skills 系统
+
+**MVP 阶段简化：** Skills 由 Claude Code SDK 内置提供（`allowedTools` 字段控制）。
+
+**架构（v0.2+）：**
+
+```
+~/.config/desktopwork/skills/        # 用户 Skills
+├── skill-id/
+│   ├── manifest.json
+│   ├── tool.ts                       # 工具实现
+│   └── ...
+
+desktop-agent/src/ai/skills/         # 系统级 Skills（v0.2+）
+├── file-system.ts
+├── process.ts
+├── desktop.ts                        # Tauri IPC tool
+```
+
+**通过 Claude Code MCP 协议扩展：**
+
+```typescript
+// platform/skills.ts
+async function loadMcpSkills(): Promise<McpServerConfig[]> {
+  const userSkillsDir = join(configDir, 'skills');
+  const skills = await readSkillsManifest(userSkillsDir);
+  return skills.map((skill) => ({
+    name: skill.id,
+    command: skill.command,
+    args: skill.args,
+  }));
+}
+
+// 传递给 Claude Code SDK
+const mcpServers = await loadMcpSkills();
+const options: Options = {
+  mcpServers,
+  // ...
+};
+```
+
+---
+
+## 六、API 设计
+
+### 6.1 Platform API
+
+| Method | Path | 描述 |
+|--------|------|------|
+| GET | `/api/platform/config` | 读取全局配置 |
+| PUT | `/api/platform/config` | 更新全局配置（部分字段） |
+| GET | `/api/platform/apps` | 列出所有 App |
+| GET | `/api/platform/apps/:id` | 获取 App 详情 |
+| GET | `/api/platform/skills` | 列出 Skills |
+| PUT | `/api/platform/skills/:id` | 启用/禁用 Skill |
+| GET | `/api/platform/memory` | 记忆查询（v0.4+） |
+
+### 6.2 Bot Chat API（MVP 核心）
+
+| Method | Path | 描述 |
+|--------|------|------|
+| POST | `/api/bot-chat/chat` | 发送消息（支持流式 SSE 响应） |
+| GET | `/api/bot-chat/sessions` | 列出会话 |
+| GET | `/api/bot-chat/sessions/:key` | 获取会话历史 |
+| DELETE | `/api/bot-chat/sessions/:key` | 删除会话 |
+
+#### POST /api/bot-chat/chat
+
+**Request：**
+
+```json
+{
+  "message": "你好",
+  "sessionKey": "default",
+  "stream": true
+}
+```
+
+**Response（stream=true, SSE）：**
+
+```
+data: {"type":"text_delta","delta":"你好"}
+data: {"type":"text_delta","delta":"！"}
+data: {"type":"tool_use","name":"Read","args":{...}}
+data: {"type":"tool_result","name":"Read","result":{...}}
+data: {"type":"message_end","content":"你好！","sessionId":"..."}
+```
+
+**Response（stream=false）：**
+
+```json
+{
+  "content": "你好！",
+  "sessionKey": "default",
+  "sessionId": "...",
+  "usage": { "inputTokens": 10, "outputTokens": 5 }
+}
+```
+
+### 6.3 与 Tauri 的 IPC
+
+**Tauri 启动 Platform 进程时的握手：**
+
+```
+Tauri (Rust)                            Platform (Node.js)
+  │                                            │
+  │  spawn + env: AUTH_TOKEN=***               │
+  │  Health check: GET /health                  │
+  │ ─────────────────────────────────────────► │
+  │                                            │
+  │  200 OK { status: 'ok' }                    │
+  │ ◄───────────────────────────────────────── │
+  │                                            │
+  │  API call: GET /api/platform/config        │
+  │  Header: X-Desktop-Work-Token: xxx         │
+  │ ─────────────────────────────────────────► │
+  │                                            │
+  │  200 OK { config: {...} }                   │
+  │ ◄───────────────────────────────────────── │
+```
+
+**Tauri 调用 Platform 进程的 API：**
+
+```rust
+// Tauri (Rust) 示例
+let response = reqwest::Client::new()
+    .get("http://localhost:3737/api/platform/config")
+    .header("X-Desktop-Work-Token", token)
+    .send()
+    .await?;
+```
+
+---
+
+## 七、依赖与版本
+
+### 7.1 desktop-agent 依赖
+
+```json
+{
+  "dependencies": {
+    "@anthropic-ai/claude-code": "^1.0.0",
+    "express": "^4.21.x",
+    "cors": "^2.8.x"
+  },
+  "devDependencies": {
+    "@types/express": "^5.x.x",
+    "@types/cors": "^2.x.x",
+    "tsx": "^4.x.x",
+    "typescript": "^5.x.x"
+  }
+}
+```
+
+### 7.2 关键依赖说明
+
+| 包 | 作用 | 选型理由 |
+|----|------|---------|
+| `@anthropic-ai/claude-code` | AI Agent SDK | 完整的 Agent 能力 + 第三方模型支持 |
+| `express` | HTTP 框架 | 已有依赖，保留 |
+| `cors` | CORS 中间件 | 跨域支持 |
+
+### 7.3 未来可选依赖
+
+| 包 | 作用 | 引入时机 |
+|----|------|---------|
+| `better-sqlite3` | 高性能本地数据库 | v0.4+（知识库、向量检索） |
+| `lancedb` 或 `chromadb` | 向量数据库 | v0.4+（Memory 检索） |
+| `@modelcontextprotocol/sdk` | MCP 协议 SDK | v0.2+（Skills 扩展） |
+| `electron-store` 或类似 | 加密本地存储 | v0.2+（加密 API Key） |
+
+---
+
+## 八、数据流（Bot Chat 场景）
+
+### 8.1 用户发送消息
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. 用户在 Tauri React 前端输入消息                                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  2. React fetch POST http://localhost:3737/api/bot-chat/chat     │
+│     Headers: X-Desktop-Work-Token, Content-Type: application/json│
+│     Body: { message, sessionKey, stream: true }                │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  3. Express 接收请求                                              │
+│     - Auth 中间件校验 token                                      │
+│     - 路由到 bot-chat routes                                    │
+│     - 加载 session 历史（getMessages）                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  4. Bot Chat service 调用 AgentService                          │
+│     - 构造 system prompt                                         │
+│     - 注入 allowedTools 列表                                     │
+│     - 调用 agentService.stream({...})                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  5. AgentService 调用 Claude Code Agent SDK                      │
+│     import { query } from '@anthropic-ai/claude-code';           │
+│     for await (msg of query({prompt, options})) { ... }         │
+│     ↓                                                          │
+│     Claude Code SDK 内部：                                       │
+│     ├─ 维护 session 状态                                         │
+│     ├─ 调用 LLM Provider（ANTHROPIC_BASE_URL 配置）              │
+│     ├─ 处理 tool calls（Read、Edit、Bash 等内置工具）             │
+│     └─ 流式返回事件                                              │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (SSE stream)
+┌─────────────────────────────────────────────────────────────────┐
+│  6. Express 将 Agent 事件流转发为 SSE                            │
+│     res.setHeader('Content-Type', 'text/event-stream')         │
+│     for await (event of agentService.stream()) {               │
+│       res.write(`data: ${JSON.stringify(event)}\n\n`);          │
+│     }                                                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  7. React 前端接收 SSE，更新 UI                                   │
+│     - 增量追加 text_delta 到 AI 消息气泡                          │
+│     - 显示 tool_use 状态                                         │
+│     - message_end 时完成渲染                                     │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼ (后端继续)
+┌─────────────────────────────────────────────────────────────────┐
+│  8. 持久化                                                      │
+│     - sessionStore.appendMessage(userMsg)                       │
+│     - sessionStore.appendMessage(assistantMsg)                 │
+│     - 记录 SDK 返回的 sessionId（用于后续续接）                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 8.2 错误处理
+
+| 错误位置 | 处理方式 |
+|---------|---------|
+| Auth 失败 | 返回 401，前端跳转到配置页 |
+| LLM API 错误 | 返回 502，错误信息展示给用户 |
+| Tool 执行失败 | Claude Code SDK 自动处理，重试或返回 error |
+| 流式中断 | 客户端 EventSource 断连，server 端 AbortController 终止 SDK |
+| Session 文件损坏 | 备份为 `.bak`，新建 session |
+
+### 8.3 多轮对话流程
+
+```
+[用户发送消息1]
+  ↓
+[AgentService.stream()]
+  ├─ 调用 Claude Code SDK query()
+  ├─ SDK 返回 session_id="abc123"
+  └─ 前端记录 session_id
+  ↓
+[用户发送消息2]
+  ↓
+[AgentService.stream({ resume: "abc123" })]
+  ├─ 调用 SDK query({ options: { resume: "abc123" }})
+  ├─ SDK 自动加载历史上下文
+  └─ 继续对话
+```
+
+---
+
+## 九、CI 与构建
+
+### 9.1 构建结构
+
+项目采用 pnpm workspace 单仓多包结构：
+
+```
+desktopwork/
+├── src-tauri/         # Tauri 主进程（Rust + React 前端）
+├── desktop-agent/     # Platform 进程（Node.js）
+└── package.json       # 根 package.json（仅作为 pnpm workspace root）
+```
+
+**CI 流程（3 个独立 build target）：**
+
+| Target | 平台 | 产物 |
+|--------|------|------|
+| **Windows** | windows-latest | `.exe` + bundled desktop-agent |
+| **macOS** | macos-latest | `.app` / `.dmg` + bundled desktop-agent |
+| **Linux** | ubuntu-latest | `.AppImage` / `.deb` + bundled desktop-agent |
+
+### 9.2 Platform 进程打包
+
+Platform 进程作为 Node.js 应用需要随 Tauri 一起打包：
+
+1. CI 在 `desktop-agent/` 中运行 `pnpm install --no-lockfile --ignore-scripts`
+2. CI 在 `desktop-agent/` 中运行 `pnpm run build` 编译 TypeScript
+3. CI 复制 `desktop-agent/dist/`、`desktop-agent/apps/` 到 `shell/src-tauri/server/`
+4. CI 复制 `desktop-agent/node_modules/`（`@anthropic-ai/claude-code` 等依赖）到 `shell/src-tauri/server/node_modules/`
+5. Tauri 启动时释放 server/ 目录到运行时路径
+
+### 9.3 依赖锁定
+
+`pnpm-lock.yaml` 在仓库中跟踪，确保 CI 和本地使用相同的依赖版本。
+
+### 9.4 验证
+
+```
+✓ pnpm install — 成功
+✓ pnpm run typecheck — 通过
+✓ pnpm run build — 通过
+✓ pnpm tauri build — 跨平台产物
+```
+
+---
+
+## 十、实施路径
+
+### 10.1 Phase 1：Platform 进程骨架（v0.1.0）
+
+从零开始创建 Platform 进程骨架：
+
+| 步骤 | 内容 |
+|------|------|
+| 1 | 初始化 `desktop-agent/` 包（`package.json`、`tsconfig.json`） |
+| 2 | 安装核心依赖：`express`、`cors`、`@anthropic-ai/claude-code` |
+| 3 | 配置 `pnpm-workspace.yaml` |
+| 4 | 实现 `src/index.ts` 入口 + `src/router.ts` 路由总入口 |
+| 5 | 实现 `src/platform/config.ts`（含 LLM env vars 应用） |
+| 6 | 实现 `src/platform/auth.ts`（HMAC token 简化版） |
+| 7 | 实现 `src/platform/storage.ts`（封装 node:fs/promises） |
+| 8 | 实现 `src/platform/app-registry.ts`（App 注册与路由挂载） |
+| 9 | 设置 CI workflow：依赖安装、TypeScript 编译、打包 |
+
+### 10.2 Phase 2：Bot Chat App（v0.1.0）
+
+实现第一个内置 App：
+
+| 步骤 | 内容 |
+|------|------|
+| 1 | 创建 `src/apps/bot-chat/` 目录结构 |
+| 2 | 实现 `src/apps/bot-chat/routes.ts`（POST /api/bot-chat/chat 等） |
+| 3 | 实现 `src/apps/bot-chat/service.ts`（业务逻辑） |
+| 4 | 创建 `apps/bot-chat/index.html` 前端静态页面 |
+| 5 | 在入口注册 Bot Chat App |
+| 6 | 前端通过 fetch 调用 API |
+
+### 10.3 Phase 3：AI 层集成（v0.1.0）
+
+封装 Claude Code Agent SDK：
+
+| 步骤 | 内容 |
+|------|------|
+| 1 | 实现 `src/ai/agent-service.ts`（封装 `query()` API） |
+| 2 | 实现 `src/ai/session-store.ts`（JSONL 会话存储） |
+| 3 | 转换 SDK 消息为统一 SSE 事件格式（text_delta、tool_use 等） |
+| 4 | 在 `bot-chat/service.ts` 中调用 `agentService.stream()` |
+| 5 | Express 将事件流转发为 SSE 响应给前端 |
+| 6 | 测试流式对话、tool 调用、session 续接 |
+
+### 10.4 Phase 4：MVP 验证（v0.1.0）
+
+端到端验证 MVP 功能：
+
+| 步骤 | 内容 |
+|------|------|
+| 1 | 前端测试：发送消息、流式响应、session 切换 |
+| 2 | 验证 SSE 协议兼容 |
+| 3 | 验证 session 持久化（重启后能恢复历史） |
+| 4 | 验证第三方模型配置（ANTHROPIC_BASE_URL 指向非 Anthropic 服务） |
+| 5 | CI 通过：编译 + 跨平台构建 |
+| 6 | 本地完整跑通：对话、工具调用、记忆 |
+
+### 10.5 未来迭代（v0.2+）
+
+| 版本 | 关键内容 |
+|------|---------|
+| v0.2 | MCP Skills 扩展、自定义工具、Tauri 内 React 渲染 |
+| v0.3 | 日历、待办等内置 App |
+| v0.4 | Memory 知识库、向量检索 |
+| v0.5 | 本地 App 加载、App 市场（规划） |
+
+| 版本 | 关键内容 |
+|------|---------|
+| v0.2 | MCP Skills 扩展、自定义工具 |
+| v0.3 | 日历、待办等内置 App |
+| v0.4 | Memory 知识库、向量检索 |
+| v0.5 | 本地 App 加载、App 市场（规划） |
+
+---
+
+## 十一、风险与对策
+
+| 风险 | 影响 | 对策 |
+|------|------|------|
+| Claude Code Agent SDK API 不稳定 | 升级困难 | 封装一层 `agent-service.ts`，隔离 SDK 细节 |
+| Claude Code 体积大 | Tauri 包体积增大 | 可考虑只打包 CLI 二进制而非完整 npm 包（v0.2+） |
+| 第三方模型协议差异 | 用户配置失败 | 提供文档 + 几个常用 provider 的预设配置（LiteLLM 教程） |
+| Session 文件膨胀 | 性能下降 | v0.4+ 实现 compaction 逻辑 |
+| Tauri 与 Node 进程管理 | 进程崩溃/泄漏 | 实现 watchdog、健康检查、自动重启 |
+| Token 安全 | 误调 API | 简化版 token + 端口仅监听 127.0.0.1（v0.2+） |
+| Claude Code 内部 session 与平台 session 不同步 | 多轮对话混乱 | 显式记录 SDK session_id 到平台 session，续接时传入 |
+
+---
+
+## 附录 A：Claude Code Agent SDK API 调研
+
+> 待 Phase 3 开始前完成，确认实际 API 与本设计的兼容性。
+
+需要确认：
+- `query()` 函数的实际签名
+- 流式消息的类型定义
+- 多轮对话的 `resume` 参数格式
+- MCP servers 配置方式
+- `allowedTools` 列表
+
+## 附录 B：第三方模型配置示例
+
+### B.1 Anthropic 官方
+
+```json
+{
+  "llm": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-6",
+    "apiKey": "sk-ant-***"
+  }
+}
+```
+
+Platform 进程设置环境变量：
+```bash
+ANTHROPIC_AUTH_TOKEN=sk-ant-***
+# ANTHROPIC_BASE_URL 留空，使用默认
+```
+
+### B.2 第三方 Anthropic 兼容服务
+
+```json
+{
+  "llm": {
+    "provider": "custom",
+    "model": "claude-sonnet-4-6",
+    "apiKey": "your-key",
+    "baseUrl": "https://your-provider.com"
+  }
+}
+```
+
+Platform 进程设置环境变量：
+```bash
+ANTHROPIC_BASE_URL=https://your-provider.com
+ANTHROPIC_AUTH_TOKEN=your-key
+```
+
+### B.3 OpenAI 兼容（通过 LiteLLM 网关）
+
+```json
+{
+  "llm": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "apiKey": "sk-***",
+    "baseUrl": "http://localhost:4000"
+  }
+}
+```
+
+需要用户先启动 LiteLLM 网关：
+```bash
+litellm --model gpt-4o --port 4000
+```
+
+---
+
+## 变更历史
+
+| 日期 | 版本 | 变更 |
+|------|------|------|
+| 2026-06-11 | 0.1 | 初稿 |

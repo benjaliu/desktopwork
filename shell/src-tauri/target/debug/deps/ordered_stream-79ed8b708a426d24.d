@@ -1,9 +1,0 @@
-/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/ordered_stream-79ed8b708a426d24.d: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/adapters.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/join.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/multi.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/../README.md
-
-/mnt/d/projects/desktopwork/shell/src-tauri/target/debug/deps/libordered_stream-79ed8b708a426d24.rmeta: /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/lib.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/adapters.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/join.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/multi.rs /home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/../README.md
-
-/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/lib.rs:
-/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/adapters.rs:
-/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/join.rs:
-/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/multi.rs:
-/home/benjamin/.cargo/registry/src/mirrors.ustc.edu.cn-38d0e5eb5da2abae/ordered-stream-0.2.0/src/../README.md:

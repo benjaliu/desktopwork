@@ -16,27 +16,16 @@ const auth = {
     return data;
   },
 
-  async logout() {
-    if (this._token) {
-      await fetch('/auth/logout', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${this._token}` },
-      });
-    }
+  logout() {
     this._token = null;
     localStorage.removeItem('dw_token');
     localStorage.removeItem('dw_user');
   },
 
-  async getUser() {
-    const token = this._token || localStorage.getItem('dw_token');
-    if (!token) return null;
-    const res = await fetch('/auth/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.user;
+  getUser() {
+    const raw = localStorage.getItem('dw_user');
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
   },
 
   getToken() {

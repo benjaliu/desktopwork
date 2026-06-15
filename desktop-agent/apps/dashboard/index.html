@@ -79,7 +79,7 @@
   <script src="/_shared/config.js"></script>
   <script>
     async function init() {
-      const user = await auth.getUser();
+      const user = auth.getUser();
       if (!user) { window.location.href = '/auth/login.html'; return; }
 
       document.getElementById('user-name').textContent = user.name || user.username || 'User';
@@ -91,10 +91,12 @@
       } catch { /* ignore */ }
 
       try {
-        const res = await fetch('/skills', { headers: { Authorization: `Bearer ${auth.getToken()}` } });
-        if (res.ok) {
+        const res = await fetch('/api/platform/skills', { headers: { 'x-desktop-work-token': auth.getToken() } });
+        if (res.status === 501) {
+          document.getElementById('stat-skills').textContent = 'N/A (v0.2+)';
+        } else if (res.ok) {
           const data = await res.json();
-          document.getElementById('stat-skills').textContent = data.skills?.length ??0;
+          document.getElementById('stat-skills').textContent = data.skills?.length ?? 0;
         }
       } catch { /* ignore */ }
 

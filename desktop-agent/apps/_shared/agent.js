@@ -1,26 +1,30 @@
 // window.agent — injected by Node HTTP Server
 const agent = {
-    _getHeaders() {
+  _getHeaders() {
     const token = window.auth?.getToken();
-    return token ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' };
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { 'x-desktop-work-token': token } : {}),
+    };
   },
 
   /**
    * Send a message and get a streaming response via SSE.
    * @param {string} message
-   * @param {{ sessionKey?: string, onDelta?: (delta: string) => void, onEnd?: (content: string) => void, onError?: (err: string) => void }} opts
+   * @param {{ sessionId?: string|null, onDelta?: (delta: string) => void, onEnd?: (content: string) => void, onError?: (err: string) => void }} opts
    * @returns {Promise<{ text: string }>}
    */
-  async chat(message, { sessionKey = 'default', onDelta, onEnd, onError } = {}) {
-    const res = await fetch('/agent/chat', {
+  async chat(message, { sessionId = null, onDelta, onEnd, onError } = {}) {
+    const res = await fetch('/api/bot-chat/chat', {
       method: 'POST',
       headers: this._getHeaders(),
-      body: JSON.stringify({ message, sessionKey, stream: true }),
+      body: JSON.stringify({ message, sessionId }),
     });
 
     if (!res.ok) {
-      const err = await res.json();
-      onError?.(err.error || res.statusText);
+      let errMsg = res.statusText;
+      try { const e = await res.json(); errMsg = e.message || e.error || errMsg; } catch { /* ignore */ }
+      onError?.(errMsg);
       return { text: '' };
     }
 
@@ -45,10 +49,10 @@ const agent = {
               if (event.type === 'text_delta') {
                 fullText += event.delta;
                 onDelta?.(event.delta);
-              } else if (event.type === 'message_end') {
+              } else if (event.type === 'session_done') {
                 onEnd?.(fullText);
               } else if (event.type === 'error') {
-                onError?.(event.error);
+                onError?.(event.message);
               }
             } catch { /* skip malformed */ }
           }
@@ -71,10 +75,10 @@ const agent = {
             if (event.type === 'text_delta') {
               fullText += event.delta;
               onDelta?.(event.delta);
-            } else if (event.type === 'message_end') {
+            } else if (event.type === 'session_done') {
               onEnd?.(fullText);
             } else if (event.type === 'error') {
-              onError?.(event.error);
+              onError?.(event.message);
             }
           } catch {
             // skip malformed
@@ -91,15 +95,16 @@ const agent = {
   /**
    * Non-streaming chat (single shot, returns once complete).
    */
-  async chatSync(message, { sessionKey = 'default' } = {}) {
-    const res = await fetch('/agent/chat', {
+  async chatSync(message, { sessionId = null } = {}) {
+    const res = await fetch('/api/bot-chat/chat', {
       method: 'POST',
       headers: this._getHeaders(),
-      body: JSON.stringify({ message, sessionKey, stream: false }),
+      body: JSON.stringify({ message, sessionId, stream: false }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || res.statusText);
+      let errMsg = res.statusText;
+      try { const e = await res.json(); errMsg = e.message || e.error || errMsg; } catch { /* ignore */ }
+      throw new Error(errMsg);
     }
     return res.json();
   },

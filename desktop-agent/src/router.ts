@@ -89,7 +89,7 @@ export function createRouter(): express.Express {
 
   // Root redirect
   app.get('/', (_req, res) => {
-    res.redirect('/apps/workbench/index.html');
+    res.redirect('/apps/dashboard/index.html');
   });
 
   return app;

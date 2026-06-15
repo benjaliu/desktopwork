@@ -101,10 +101,12 @@
 
       // Load skills
       try {
-        const res = await fetch('/skills', { headers: { Authorization: `Bearer ${auth.getToken()}` } });
-        if (res.ok) {
+        const res = await fetch('/api/platform/skills', { headers: { 'x-desktop-work-token': auth.getToken() } });
+        const list = document.getElementById('skills-list');
+        if (res.status === 501) {
+          list.innerHTML = '<p style="color:#888;font-size:14px;">No skills loaded (v0.2+).</p>';
+        } else if (res.ok) {
           const data = await res.json();
-          const list = document.getElementById('skills-list');
           if (!data.skills || data.skills.length === 0) {
             list.innerHTML = '<p style="color:#888;font-size:14px;">No skills loaded.</p>';
           } else {
@@ -118,6 +120,8 @@
               </div>
             `).join('');
           }
+        } else {
+          list.textContent = 'Failed to load skills.';
         }
       } catch (e) {
         document.getElementById('skills-list').textContent = 'Failed to load skills.';

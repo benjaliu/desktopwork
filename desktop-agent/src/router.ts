@@ -83,8 +83,9 @@ export function createRouter(): express.Express {
 
   // Static files (App frontends)
   // Dev: <repo>/apps; Prod: APPS_DIR env var
+  // __dirname = .../desktop-agent/src, so APPS_DIR = .../desktop-agent/apps
   const APPS_DIR = process.env.DESKTOPWORK_APPS_DIR
-    ?? join(__dirname, '..', '..', 'apps');
+    ?? join(__dirname, '..', 'apps');
   app.use('/apps', express.static(APPS_DIR));
 
   // Root redirect

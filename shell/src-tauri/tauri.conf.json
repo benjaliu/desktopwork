@@ -3,7 +3,9 @@
   "productName": "DesktopWork",
   "version": "0.1.0",
   "identifier": "com.benjamin.desktopwork",
-  "build": {},
+  "build": {
+    "frontendDist": "server/dist"
+  },
   "app": {
     "windows": [
       {
@@ -31,6 +33,9 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
+    ],
+    "resources": [
+      "server"
     ],
     "windows": {
       "nsis": {

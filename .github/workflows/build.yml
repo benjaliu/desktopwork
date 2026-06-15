@@ -74,7 +74,7 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           pnpm tauri --version
-          pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
+          pnpm tauri info --config src-tauri/tauri.conf.json 2>&1 || echo "tauri info failed with exit code $?"
           ls -la src-tauri/ 2>&1
           ls -la src-tauri/server/ 2>&1 | head -10
           ls -la src-tauri/server/dist/ 2>&1 | head -5 || echo "server/dist not found"
@@ -94,7 +94,7 @@ jobs:
             . "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
           fi
           set -o pipefail
-          pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
+          pnpm tauri build --config src-tauri/tauri.conf.json --verbose 2>&1 | tee /tmp/tauri-build-log.txt
         working-directory: shell
 
       - name: Upload Windows build log
@@ -190,7 +190,7 @@ jobs:
         run: |
           . "$HOME/.cargo/env"
           set -o pipefail
-          pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
+          pnpm tauri build --config src-tauri/tauri.conf.json --verbose 2>&1 | tee /tmp/tauri-build-log.txt
         working-directory: shell
 
       - name: Build log on failure

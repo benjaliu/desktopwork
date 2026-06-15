@@ -64,8 +64,18 @@ jobs:
         working-directory: shell
 
       - name: Build Tauri (Windows)
-        run: pnpm tauri build
+        run: |
+          set -o pipefail
+          pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
         working-directory: shell
+
+      - name: Upload Windows build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build-log-windows
+          path: /tmp/tauri-build-log.txt
+          retention-days: 7
 
       - name: Upload Windows exe
         uses: actions/upload-artifact@v4
@@ -114,9 +124,28 @@ jobs:
         run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
         working-directory: .
 
-      - name: Build Tauri (macOS)
-        run: pnpm tauri build
+      - name: Debug Tauri setup (macOS)
+        run: |
+          pnpm tauri --version
+          pnpm tauri info 2>&1
+          ls -la src-tauri/ 2>&1
+          ls -la src-tauri/server/ 2>&1 | head -10
+          ls -la src-tauri/target/ 2>&1 | head -5
         working-directory: shell
+
+      - name: Build Tauri (macOS)
+        run: |
+          set -o pipefail
+          pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
+        working-directory: shell
+
+      - name: Upload macOS build log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build-log-macos
+          path: /tmp/tauri-build-log.txt
+          retention-days: 7
 
       - name: Upload macOS dmg
         uses: actions/upload-artifact@v4

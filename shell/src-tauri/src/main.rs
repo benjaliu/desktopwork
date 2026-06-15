@@ -103,11 +103,12 @@ fn setup_logging() {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::try_from(level_str.as_str()).unwrap_or_default());
 
-    tracing_subscriber::registry()
+    // Use try_init to avoid panic if subscriber is already initialized
+    let _ = tracing_subscriber::registry()
         .with(filter)
         .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
         .with(fmt::layer().with_writer(std::io::stderr).with_ansi(false))
-        .init();
+        .try_init();
 }
 
 // === Node Process Manager ===

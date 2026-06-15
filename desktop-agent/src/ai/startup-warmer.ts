@@ -4,6 +4,7 @@ import { mkdirSync } from 'node:fs';
 import { loadConfig } from '../platform/config.js';
 import type { DesktopWorkConfig } from '../platform/types.js';
 import { buildEnv, PLATFORM_CWD } from './agent-service.js';
+import { logger } from '../platform/logger.js';
 
 let warm: WarmQuery | null = null;
 
@@ -27,9 +28,9 @@ export async function prewarmClaude(_cfg: DesktopWorkConfig): Promise<void> {
       },
       initializeTimeoutMs: 30_000,
     });
-    console.log('[claude] subprocess prewarmed');
+    logger.info('[claude] subprocess prewarmed');
   } catch (e: any) {
-    console.error('[claude] prewarm failed:', e.message);
+    logger.error(`[claude] prewarm failed: ${e.message}`);
     // Don't throw — failure doesn't affect Platform startup
   }
 }

@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::env;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -13,6 +14,9 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{sleep, Duration};
+use tracing::{error, info, warn};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 // === Config ===
 
@@ -26,7 +30,7 @@ struct AgentConfig {
 
 impl AgentConfig {
     fn from_env() -> Self {
-        let http_port = std::env::var("PORT")
+        let http_port = env::var("PORT")
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(3737);
@@ -34,7 +38,7 @@ impl AgentConfig {
         let server_entry = if cfg!(debug_assertions) {
             PathBuf::from("/mnt/d/projects/desktopwork/desktop-agent/src/index.ts")
         } else {
-            std::env::current_exe()
+            env::current_exe()
                 .map(|p| p.parent().unwrap_or(&p).join("server/dist/index.js"))
                 .unwrap_or_else(|_| PathBuf::from("server/dist/index.js"))
         };
@@ -62,6 +66,50 @@ impl AgentConfig {
     }
 }
 
+// === Log dir ===
+
+fn log_dir() -> PathBuf {
+    let base = dirs::data_local_dir().unwrap_or_else(|| {
+        let home = env::var("HOME").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("."));
+        home.join(".local/share")
+    });
+    base.join("desktopwork/logs")
+}
+
+// === Log level resolution ===
+
+fn parse_log_level() -> String {
+    // CLI flag wins: --log-level=debug
+    for (i, arg) in env::args().enumerate() {
+        if arg == "--log-level" && i + 1 < env::args().len() {
+            return env::args().nth(i + 1).unwrap_or_else(|| "info".to_string());
+        }
+    }
+    // RUST_LOG env var fallback
+    env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string())
+}
+
+fn setup_logging() {
+    let log_path = log_dir();
+    let _ = std::fs::create_dir_all(&log_path);
+
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_path, "desktopwork.log");
+    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // Leak the guard so it lives for the entire process lifetime
+    Box::leak(Box::new(_guard));
+
+    let level_str = parse_log_level();
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::try_from(level_str.as_str()).unwrap_or_default());
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
+        .with(fmt::layer().with_writer(std::io::stderr).with_ansi(false))
+        .init();
+}
+
 // === Node Process Manager ===
 
 struct NodeProcess {
@@ -82,20 +130,33 @@ impl NodeProcess {
     async fn start(&self, config: &AgentConfig) -> Result<(), String> {
         let (cmd, args) = config.spawn_cmd();
 
-        log::info!("Spawning Node: {} {:?}", cmd, args);
+        info!("Spawning Node: {} {:?}", cmd, args);
 
         let mut child = tokio::process::Command::new(&cmd)
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to spawn Node process: {}", e))?;
 
+        // Pipe Node stdout into the tracing logger with [node] prefix
         if let Some(stdout) = child.stdout.take() {
             let mut reader = BufReader::new(stdout).lines();
             tokio::spawn(async move {
-                while reader.next_line().await.is_ok() {}
+                while let Ok(Some(line)) = reader.next_line().await {
+                    info!("[node] {}", line);
+                }
+            });
+        }
+
+        // Pipe Node stderr into the tracing logger with [node] prefix
+        if let Some(stderr) = child.stderr.take() {
+            let mut reader = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = reader.next_line().await {
+                    error!("[node] {}", line);
+                }
             });
         }
 
@@ -105,7 +166,7 @@ impl NodeProcess {
         }
 
         self.wait_for_ready().await?;
-        log::info!("Node HTTP server ready at {}", self.base_url);
+        info!("Node HTTP server ready at {}", self.base_url);
         Ok(())
     }
 
@@ -117,7 +178,7 @@ impl NodeProcess {
                 return Ok(());
             }
             if attempt % 10 == 0 {
-                log::debug!("Server not ready (attempt {})", attempt);
+                warn!("Server not ready (attempt {})", attempt);
             }
             sleep(Duration::from_millis(500)).await;
         }
@@ -127,7 +188,7 @@ impl NodeProcess {
     async fn stop(&self) -> Result<(), String> {
         let mut guard = self.child.lock().await;
         if let Some(ref mut child) = guard.take() {
-            log::info!("Stopping Node process");
+            info!("Stopping Node process");
             child.kill().await.map_err(|e| e.to_string())?;
         }
         Ok(())
@@ -216,16 +277,13 @@ const SPLASH_HTML: &str = r#"<!DOCTYPE html>
 // === Main ===
 
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .init();
+    setup_logging();
 
     let config = AgentConfig::from_env();
-    log::info!("DesktopWork starting");
-    log::info!("  Server entry: {:?}", config.server_entry);
-    log::info!("  HTTP port: {}", config.http_port);
-    log::info!("  Runner: {}", if config.is_ts_source() { "tsx" } else { "node" });
+    info!("DesktopWork starting");
+    info!("  Server entry: {:?}", config.server_entry);
+    info!("  HTTP port: {}", config.http_port);
+    info!("  Runner: {}", if config.is_ts_source() { "tsx" } else { "node" });
 
     let server_entry = config.server_entry.clone();
     let http_port = config.http_port;
@@ -271,7 +329,7 @@ fn main() {
             tauri::async_runtime::spawn(async move {
                 // Start Node process
                 if let Err(e) = node_proc.start(&agent_config).await {
-                    log::error!("Failed to start Node process: {}", e);
+                    error!("Failed to start Node process: {}", e);
                     // Show error in the webview
                     let _ = window.eval(&format!(
                         "document.body.innerHTML = '<div style=\"padding:40px;font-family:sans-serif;color:#e74c3c;\"><h2>Failed to start server</h2><p>{}</p></div>'",
@@ -283,7 +341,7 @@ fn main() {
                 // Step 3: Node is ready — navigate to the actual app
                 let navigate_js = format!("window.location.href = '{}';", node_proc.base_url);
                 if let Err(e) = window.eval(&navigate_js) {
-                    log::error!("Failed to navigate to app: {}", e);
+                    error!("Failed to navigate to app: {}", e);
                 }
 
                 // Set up close handler after window is ready
@@ -300,7 +358,7 @@ fn main() {
             });
 
             if let Err(e) = create_menu(&handle) {
-                log::warn!("Failed to create menu: {}", e);
+                warn!("Failed to create menu: {}", e);
             }
 
             Ok(())

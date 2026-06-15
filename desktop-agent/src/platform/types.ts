@@ -1,4 +1,6 @@
 // src/platform/types.ts
+export type Level = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+
 export interface AgentConfig {
   provider: string;
   model: string;
@@ -11,6 +13,7 @@ export interface SystemConfig {
   host: string;
   dataDir: string;
   autoStart: boolean;
+  logLevel?: Level;
 }
 
 export interface DesktopWorkConfig {

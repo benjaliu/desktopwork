@@ -48,6 +48,7 @@ export function getDefaultConfig(): DesktopWorkConfig {
       host: '127.0.0.1',
       dataDir: '',
       autoStart: false,
+      logLevel: 'info',
     },
     enabledSkills: [],
     enabledApps: ['bot-chat', 'settings'],

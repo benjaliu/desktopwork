@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { readdir, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { logger } from './platform/logger.js';
 
 const router = Router();
 
@@ -31,7 +32,7 @@ async function loadSkills(): Promise<any[]> {
     skillsLoaded = true;
     return skillsCache;
   } catch (e) {
-    console.error('Failed to load skills:', e);
+    logger.error(`Failed to load skills: ${e}`);
     return [];
   }
 }

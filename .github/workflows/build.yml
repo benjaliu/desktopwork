@@ -54,8 +54,16 @@ jobs:
         run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
         working-directory: .
 
+      - name: Setup Rust environment
+        run: |
+          . "$HOME/.cargo/env"
+          echo "Rust version: $(rustc --version)"
+          echo "Cargo version: $(cargo --version)"
+        shell: bash
+
       - name: Debug Tauri setup
         run: |
+          . "$HOME/.cargo/env"
           pnpm tauri --version
           pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
           ls -la src-tauri/ 2>&1
@@ -66,6 +74,7 @@ jobs:
 
       - name: Build Tauri (Windows)
         run: |
+          . "$HOME/.cargo/env"
           set -o pipefail
           pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
         working-directory: shell
@@ -125,8 +134,16 @@ jobs:
         run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
         working-directory: .
 
+      - name: Setup Rust environment (macOS)
+        run: |
+          . "$HOME/.cargo/env"
+          echo "Rust version: $(rustc --version)"
+          echo "Cargo version: $(cargo --version)"
+        shell: bash
+
       - name: Debug Tauri setup (macOS)
         run: |
+          . "$HOME/.cargo/env"
           pnpm tauri --version
           pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
           ls -la src-tauri/ 2>&1
@@ -137,6 +154,7 @@ jobs:
 
       - name: Build Tauri (macOS)
         run: |
+          . "$HOME/.cargo/env"
           set -o pipefail
           pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
         working-directory: shell
@@ -144,6 +162,7 @@ jobs:
       - name: Build log on failure
         if: failure()
         run: |
+          . "$HOME/.cargo/env"
           echo "=== Build failed, capturing diagnostics ==="
           pnpm tauri info 2>&1 || true
           ls -la src-tauri/ 2>&1 || true

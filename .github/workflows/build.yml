@@ -57,9 +57,10 @@ jobs:
       - name: Debug Tauri setup
         run: |
           pnpm tauri --version
-          pnpm tauri info 2>&1
+          pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
           ls -la src-tauri/ 2>&1
           ls -la src-tauri/server/ 2>&1 | head -10
+          ls -la src-tauri/server/dist/ 2>&1 | head -5 || echo "server/dist not found"
           ls -la src-tauri/target/ 2>&1 | head -5
         working-directory: shell
 
@@ -127,9 +128,10 @@ jobs:
       - name: Debug Tauri setup (macOS)
         run: |
           pnpm tauri --version
-          pnpm tauri info 2>&1
+          pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
           ls -la src-tauri/ 2>&1
           ls -la src-tauri/server/ 2>&1 | head -10
+          ls -la src-tauri/server/dist/ 2>&1 | head -5 || echo "server/dist not found"
           ls -la src-tauri/target/ 2>&1 | head -5
         working-directory: shell
 
@@ -137,6 +139,15 @@ jobs:
         run: |
           set -o pipefail
           pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
+        working-directory: shell
+
+      - name: Build log on failure
+        if: failure()
+        run: |
+          echo "=== Build failed, capturing diagnostics ==="
+          pnpm tauri info 2>&1 || true
+          ls -la src-tauri/ 2>&1 || true
+          ls -la src-tauri/server/dist/ 2>&1 || true
         working-directory: shell
 
       - name: Upload macOS build log

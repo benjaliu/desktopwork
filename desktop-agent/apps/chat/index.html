@@ -100,13 +100,16 @@
         let fullText = '';
 
         try {
+          const savedSessionId = localStorage.getItem('dw_session_id');
           await window.agent.chat(message, {
+            sessionId: savedSessionId,
             onDelta(delta) {
               appendToBubble(bubble, delta);
               fullText += delta;
             },
-            onEnd(content) {
+            onEnd(content, sessionId) {
               finalizeBubble(bubble, content || fullText);
+              if (sessionId) localStorage.setItem('dw_session_id', sessionId);
               setInputEnabled(true);
             },
             onError(err) {

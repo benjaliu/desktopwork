@@ -33,6 +33,7 @@ const agent = {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';
+    let sessionId = null;
 
     try {
       while (true) {
@@ -50,7 +51,8 @@ const agent = {
                 fullText += event.delta;
                 onDelta?.(event.delta);
               } else if (event.type === 'session_done') {
-                onEnd?.(fullText);
+                sessionId = event.sessionId;
+                onEnd?.(fullText, sessionId);
               } else if (event.type === 'error') {
                 onError?.(event.message);
               }
@@ -76,7 +78,8 @@ const agent = {
               fullText += event.delta;
               onDelta?.(event.delta);
             } else if (event.type === 'session_done') {
-              onEnd?.(fullText);
+              sessionId = event.sessionId;
+              onEnd?.(fullText, sessionId);
             } else if (event.type === 'error') {
               onError?.(event.message);
             }

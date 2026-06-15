@@ -10,9 +10,10 @@ const auth = {
     });
     if (!res.ok) throw new Error('Login failed');
     const data = await res.json();
+    const user = data.user ?? { name: username, username, role: 'user' };
     this._token = data.token;
     localStorage.setItem('dw_token', data.token);
-    localStorage.setItem('dw_user', JSON.stringify(data.user));
+    localStorage.setItem('dw_user', JSON.stringify(user));
     return data;
   },
 
@@ -25,7 +26,10 @@ const auth = {
   getUser() {
     const raw = localStorage.getItem('dw_user');
     if (!raw) return null;
-    try { return JSON.parse(raw); } catch { return null; }
+    try { return JSON.parse(raw); } catch {
+      localStorage.removeItem('dw_user');
+      return null;
+    }
   },
 
   getToken() {

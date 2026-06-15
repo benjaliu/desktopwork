@@ -79,8 +79,8 @@
   <script src="/apps/_shared/config.js"></script>
   <script>
     async function init() {
-      const user = auth.getUser();
-      if (!user) { window.location.href = '/apps/auth/login.html'; return; }
+      if (!auth.getToken()) { window.location.href = '/apps/auth/login.html'; return; }
+      const user = auth.getUser() ?? { name: 'user' };
 
       document.getElementById('user-name').textContent = user.name || user.username || 'User';
       document.getElementById('user-role').textContent = user.role || '';

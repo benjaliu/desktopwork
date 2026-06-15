@@ -56,9 +56,18 @@ jobs:
 
       - name: Setup Rust environment
         run: |
-          . "$HOME/.cargo/env"
-          echo "Rust version: $(rustc --version)"
-          echo "Cargo version: $(cargo --version)"
+          # Try multiple possible Rust env locations on Windows
+          if [ -f "$HOME/.cargo/env" ]; then
+            . "$HOME/.cargo/env"
+          elif [ -f "$HOME/.rustup/env" ]; then
+            . "$HOME/.rustup/env"
+          elif [ -f "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
+            . "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
+          elif [ -f "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
+            . "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
+          fi
+          echo "Rust version: $(rustc --version 2>/dev/null || echo 'not found')"
+          echo "Cargo version: $(cargo --version 2>/dev/null || echo 'not found')"
         shell: bash
 
       - name: Debug Tauri setup
@@ -74,7 +83,16 @@ jobs:
 
       - name: Build Tauri (Windows)
         run: |
-          . "$HOME/.cargo/env"
+          # Try multiple possible Rust env locations on Windows
+          if [ -f "$HOME/.cargo/env" ]; then
+            . "$HOME/.cargo/env"
+          elif [ -f "$HOME/.rustup/env" ]; then
+            . "$HOME/.rustup/env"
+          elif [ -f "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
+            . "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
+          elif [ -f "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
+            . "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
+          fi
           set -o pipefail
           pnpm tauri build --verbose 2>&1 | tee /tmp/tauri-build-log.txt
         working-directory: shell
@@ -144,11 +162,27 @@ jobs:
       - name: Debug Tauri setup (macOS)
         run: |
           . "$HOME/.cargo/env"
-          pnpm tauri --version
+          echo "=== Node version ==="
+          node --version
+          echo "=== npm version ==="
+          npm --version
+          echo "=== pnpm version ==="
+          pnpm --version
+          echo "=== tauri cli version ==="
+          pnpm tauri --version 2>&1 || echo "tauri cli version failed"
+          echo "=== rustc version ==="
+          rustc --version
+          echo "=== cargo version ==="
+          cargo --version
+          echo "=== running tauri info ==="
           pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
+          echo "=== src-tauri contents ==="
           ls -la src-tauri/ 2>&1
+          echo "=== src-tauri/server contents ==="
           ls -la src-tauri/server/ 2>&1 | head -10
+          echo "=== src-tauri/server/dist contents ==="
           ls -la src-tauri/server/dist/ 2>&1 | head -5 || echo "server/dist not found"
+          echo "=== src-tauri/target contents ==="
           ls -la src-tauri/target/ 2>&1 | head -5
         working-directory: shell
 

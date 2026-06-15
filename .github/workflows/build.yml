@@ -54,6 +54,15 @@ jobs:
         run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
         working-directory: .
 
+      - name: Debug Tauri setup
+        run: |
+          pnpm tauri --version
+          pnpm tauri info 2>&1
+          ls -la src-tauri/ 2>&1
+          ls -la src-tauri/server/ 2>&1 | head -10
+          ls -la src-tauri/target/ 2>&1 | head -5
+        working-directory: shell
+
       - name: Build Tauri (Windows)
         run: pnpm tauri build
         working-directory: shell

@@ -37,7 +37,7 @@
     </form>
   </div>
 
-  <script src="/_shared/auth.js"></script>
+  <script src="/apps/_shared/auth.js"></script>
   <script>
     document.getElementById('login-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -52,7 +52,7 @@
 
       try {
         await auth.login(username, password);
-        window.location.href = '/';
+        window.location.href = '/apps/dashboard/index.html';
       } catch (e) {
         errorEl.textContent = e.message || 'Login failed';
         errorEl.style.display = 'block';

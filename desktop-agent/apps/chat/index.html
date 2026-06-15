@@ -4,16 +4,16 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chat — DesktopWork</title>
-  <link rel="stylesheet" href="/_shared/styles.css">
+  <link rel="stylesheet" href="/apps/_shared/styles.css">
 </head>
 <body>
   <div id="app">
     <div id="sidebar">
       <div class="logo">DesktopWork</div>
       <nav>
-        <a href="/">Dashboard</a>
-        <a href="/chat" class="active">Chat</a>
-        <a href="/settings">Settings</a>
+        <a href="/apps/dashboard/index.html">Dashboard</a>
+        <a href="/apps/chat/index.html" class="active">Chat</a>
+        <a href="/apps/settings/index.html">Settings</a>
       </nav>
       <div class="status"><span class="dot"></span>Ready</div>
     </div>
@@ -26,13 +26,13 @@
     </div>
   </div>
 
-  <script src="/_shared/auth.js"></script>
-  <script src="/_shared/config.js"></script>
-  <script src="/_shared/agent.js"></script>
+  <script src="/apps/_shared/auth.js"></script>
+  <script src="/apps/_shared/config.js"></script>
+  <script src="/apps/_shared/agent.js"></script>
   <script>
     async function init() {
       if (!window.auth.getToken()) {
-        window.location.href = '/auth/login.html';
+        window.location.href = '/apps/auth/login.html';
         return;
       }
 

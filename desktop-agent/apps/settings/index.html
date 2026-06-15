@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Settings — DesktopWork</title>
-  <link rel="stylesheet" href="/_shared/styles.css">
+  <link rel="stylesheet" href="/apps/_shared/styles.css">
   <style>
     .settings-section { margin-bottom: 32px; }
     .settings-section h3 { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
@@ -16,9 +16,9 @@
     <div id="sidebar">
       <div class="logo">DesktopWork</div>
       <nav>
-        <a href="/">Dashboard</a>
-        <a href="/chat">Chat</a>
-        <a href="/settings" class="active">Settings</a>
+        <a href="/apps/dashboard/index.html">Dashboard</a>
+        <a href="/apps/chat/index.html">Chat</a>
+        <a href="/apps/settings/index.html" class="active">Settings</a>
       </nav>
       <div class="status"><span class="dot"></span>Ready</div>
     </div>
@@ -63,11 +63,11 @@
     </div>
   </div>
 
-  <script src="/_shared/auth.js"></script>
-  <script src="/_shared/config.js"></script>
+  <script src="/apps/_shared/auth.js"></script>
+  <script src="/apps/_shared/config.js"></script>
   <script>
     async function init() {
-      if (!auth.getToken()) { window.location.href = '/auth/login.html'; return; }
+      if (!auth.getToken()) { window.location.href = '/apps/auth/login.html'; return; }
 
       // Load agent config
       try {
@@ -130,7 +130,7 @@
       // Logout
       document.getElementById('logout-btn').addEventListener('click', async () => {
         await auth.logout();
-        window.location.href = '/auth/login.html';
+        window.location.href = '/apps/auth/login.html';
       });
     }
 

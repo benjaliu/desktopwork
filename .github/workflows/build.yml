@@ -51,7 +51,7 @@ jobs:
         working-directory: desktop-agent
 
       - name: Deploy server bundle (auto-collects all deps incl. claude binary)
-        run: pnpm deploy --filter desktop-agent --prod --legacy shell\src-tauri\server
+        run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
         working-directory: .
 
       - name: Build Tauri (Windows)

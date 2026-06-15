@@ -40,7 +40,12 @@ jobs:
         run: pnpm install --no-lockfile --ignore-scripts
         working-directory: desktop-agent
 
-      # Compile TypeScript → JavaScript
+      # Lint = tsc --noEmit (待加 biome/eslint)
+      - name: Lint
+        run: pnpm run typecheck
+        working-directory: desktop-agent
+
+      # TypeScript type-check then compile to JavaScript
       - name: Compile TypeScript
         run: pnpm run build
         working-directory: desktop-agent
@@ -94,6 +99,11 @@ jobs:
 
       - name: Install desktop-agent deps
         run: pnpm install --no-lockfile --ignore-scripts
+        working-directory: desktop-agent
+
+      # Lint = tsc --noEmit (待加 biome/eslint)
+      - name: Lint
+        run: pnpm run typecheck
         working-directory: desktop-agent
 
       - name: Compile TypeScript

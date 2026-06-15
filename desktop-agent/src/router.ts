@@ -3,6 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import { authMiddleware, generateToken } from './platform/auth.js';
 import { loadConfig, updateConfig } from './platform/config.js';
+import { invalidateWarmQuery } from './ai/startup-warmer.js';
 import { listApps, getApp } from './platform/app-registry.js';
 import { createBotChatRouter } from './apps/bot-chat/routes.js';
 import { join, dirname } from 'node:path';
@@ -46,7 +47,20 @@ export function createRouter(): express.Express {
 
   app.put('/api/platform/config', async (req, res) => {
     try {
+      const before = await loadConfig();
       const updated = await updateConfig(req.body);
+      // Invalidate warm subprocess when agent env (baseUrl/apiKey) changes.
+      // This forces a fresh startup() with the new ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN.
+      if (req.body?.agent) {
+        const agentBefore = before.agent ?? {};
+        const agentAfter = updated.agent ?? {};
+        if (
+          agentAfter.baseUrl !== agentBefore.baseUrl ||
+          agentAfter.apiKey !== agentBefore.apiKey
+        ) {
+          await invalidateWarmQuery();
+        }
+      }
       res.json(updated);
     } catch (e: any) {
       res.status(500).json({ error: 'config_update_failed', message: e.message });

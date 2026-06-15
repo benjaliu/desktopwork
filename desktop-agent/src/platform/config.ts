@@ -25,7 +25,12 @@ export async function saveConfig(cfg: DesktopWorkConfig): Promise<void> {
 
 export async function updateConfig(partial: Partial<DesktopWorkConfig>): Promise<DesktopWorkConfig> {
   const current = await loadConfig();
-  const updated = { ...current, ...partial };
+  // Deep merge agent so partial { agent: { baseUrl: "..." } } doesn't wipe other agent fields.
+  const updated: DesktopWorkConfig = {
+    ...current,
+    ...partial,
+    agent: { ...current.agent, ...(partial.agent ?? {}) },
+  };
   await saveConfig(updated);
   return updated;
 }

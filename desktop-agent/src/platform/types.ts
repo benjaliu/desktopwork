@@ -1,6 +1,6 @@
 // src/platform/types.ts
 export interface AgentConfig {
-  provider: 'anthropic' | 'custom';
+  provider: string;
   model: string;
   apiKey: string;
   baseUrl?: string;

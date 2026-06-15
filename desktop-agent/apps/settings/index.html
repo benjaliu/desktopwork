@@ -9,6 +9,7 @@
     .settings-section { margin-bottom: 32px; }
     .settings-section h3 { font-size: 14px; color: #888; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 16px; }
     .save-status { font-size: 13px; color: #22c55e; margin-top: 8px; display: none; }
+  .restart-hint { font-size: 13px; color: #f59e0b; margin-top: 8px; display: none; }
   </style>
 </head>
 <body>
@@ -32,6 +33,7 @@
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="ollama">Ollama</option>
+              <option value="custom">Custom</option>
             </select>
           </div>
           <div class="form-group">
@@ -48,6 +50,7 @@
           </div>
           <button type="submit" class="btn btn-primary">Save Changes</button>
           <div class="save-status" id="save-status">✓ Saved</div>
+          <div class="restart-hint" id="restart-hint">⚠ Base URL or API key changed — restart server for full effect</div>
         </form>
       </div>
 
@@ -81,6 +84,8 @@
       }
 
       // Save agent config
+      const originalBaseUrl = document.getElementById('cfg-baseUrl').value;
+      const originalApiKey = document.getElementById('cfg-apiKey').value;
       document.getElementById('agent-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const patch = {
@@ -94,6 +99,13 @@
           const statusEl = document.getElementById('save-status');
           statusEl.style.display = 'block';
           setTimeout(() => statusEl.style.display = 'none', 2000);
+          // Show restart hint if baseUrl or apiKey changed
+          const newBaseUrl = document.getElementById('cfg-baseUrl').value;
+          const newApiKey = document.getElementById('cfg-apiKey').value;
+          if (newBaseUrl !== originalBaseUrl || newApiKey !== originalApiKey) {
+            const hintEl = document.getElementById('restart-hint');
+            hintEl.style.display = 'block';
+          }
         } catch (err) {
           alert('Failed to save: ' + err.message);
         }

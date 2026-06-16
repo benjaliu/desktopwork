@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
 
@@ -18,51 +18,118 @@ use tracing::{error, info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+// === Target triple helper (Tauri 2 sidecar renames externalBin to <name>-<target-triple>) ===
+
+/// Cargo target triple. Tauri 2 renames `externalBin` entries from
+/// `node` → `node-{target-triple}` (with `.exe` appended on Windows)
+/// inside the bundle's resource directory at runtime.
+fn current_target_triple() -> &'static str {
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(target_os = "macos") {
+        "x86_64-apple-darwin"
+    } else if cfg!(target_os = "windows") {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    }
+}
+
+// === Server entry resolution ===
+
+/// Resolve the Node HTTP server entry file.
+///
+/// dev:  DESKTOPWORK_DEV_ENTRY env var → desktop-agent/src/index.ts (relative to CWD)
+/// prod: {resource_dir}/server/dist/index.js (bundled by CI `pnpm deploy`)
+fn resolve_server_entry<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
+    if cfg!(debug_assertions) {
+        std::env::var("DESKTOPWORK_DEV_ENTRY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("desktop-agent/src/index.ts"))
+    } else {
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .expect("failed to get resource dir");
+        resource_dir.join("server").join("dist").join("index.js")
+    }
+}
+
+// === Node runner resolution (dev = system PATH, prod = Tauri sidecar) ===
+
+/// Resolve the Node runner command + args for the given entry.
+///
+/// dev:  system PATH `tsx` (for .ts) or `node` (for .js) — developer is expected to have Node.
+/// prod: Tauri 2 sidecar `node-{platform}-{target-triple}` from the bundle's resource_dir.
+fn resolve_node_runner<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    entry: &Path,
+) -> (PathBuf, Vec<String>) {
+    if cfg!(debug_assertions) {
+        let cmd = if entry.extension().map(|e| e == "ts").unwrap_or(false) {
+            "tsx"
+        } else {
+            "node"
+        };
+        (PathBuf::from(cmd), vec![entry.to_string_lossy().to_string()])
+    } else {
+        let resource_dir = app
+            .path()
+            .resource_dir()
+            .expect("failed to get resource dir");
+        // Tauri 2 renames externalBin entries by appending the cargo target triple:
+        //   node (externalBin base name)
+        //     → node-x86_64-unknown-linux-gnu        (Linux)
+        //     → node-x86_64-apple-darwin             (macOS Intel)
+        //     → node-aarch64-apple-darwin            (macOS Apple Silicon)
+        //     → node-x86_64-pc-windows-msvc.exe      (Windows)
+        // The base name `node` lives in shell/node-binaries/ as a target-triple suffixed file
+        // produced by the GitHub Actions workflow (`§9.13.5.1`-style download step).
+        let sidecar_path = {
+            #[allow(unused_mut)] // mut is needed on Windows for set_extension
+            let mut p = resource_dir.join(format!("node-{}", current_target_triple()));
+            #[cfg(windows)]
+            {
+                p.set_extension("exe");
+            }
+            p
+        };
+        (sidecar_path, vec![entry.to_string_lossy().to_string()])
+    }
+}
+
 // === Config ===
 
 struct AgentConfig {
-    /// Absolute path to the Node HTTP server entry JS file.
-    /// In dev: desktop-agent/src/index.ts (tsx)
-    /// In prod: resolved from bundled resources (node)
+    /// Absolute path to the Node HTTP server entry JS/TS file.
     server_entry: PathBuf,
+    /// Node runner binary path (prod = sidecar, dev = "tsx"/"node" on PATH).
+    node_runner: PathBuf,
+    /// Args passed to the Node runner.
+    node_args: Vec<String>,
     http_port: u16,
 }
 
 impl AgentConfig {
-    fn from_env() -> Self {
+    fn build<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> Self {
         let http_port = env::var("PORT")
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(3737);
 
-        let server_entry = if cfg!(debug_assertions) {
-            PathBuf::from("/mnt/d/projects/desktopwork/desktop-agent/src/index.ts")
-        } else {
-            env::current_exe()
-                .map(|p| p.parent().unwrap_or(&p).join("server/dist/index.js"))
-                .unwrap_or_else(|_| PathBuf::from("server/dist/index.js"))
-        };
+        let server_entry = resolve_server_entry(app);
+        let (node_runner, node_args) = resolve_node_runner(app, &server_entry);
 
         Self {
             server_entry,
+            node_runner,
+            node_args,
             http_port,
         }
     }
 
     fn base_url(&self) -> String {
         format!("http://localhost:{}/", self.http_port)
-    }
-
-    fn is_ts_source(&self) -> bool {
-        self.server_entry.extension().map(|e| e == "ts").unwrap_or(false)
-    }
-
-    fn spawn_cmd(&self) -> (String, Vec<String>) {
-        if self.is_ts_source() {
-            ("tsx".to_string(), vec![self.server_entry.to_string_lossy().to_string()])
-        } else {
-            ("node".to_string(), vec![self.server_entry.to_string_lossy().to_string()])
-        }
     }
 }
 
@@ -129,12 +196,13 @@ impl NodeProcess {
     }
 
     async fn start(&self, config: &AgentConfig) -> Result<(), String> {
-        let (cmd, args) = config.spawn_cmd();
+        info!(
+            "Spawning Node runner: {:?} {:?}",
+            config.node_runner, config.node_args
+        );
 
-        info!("Spawning Node: {} {:?}", cmd, args);
-
-        let mut child = tokio::process::Command::new(&cmd)
-            .args(args)
+        let mut child = tokio::process::Command::new(&config.node_runner)
+            .args(&config.node_args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -280,34 +348,24 @@ const SPLASH_HTML: &str = r#"<!DOCTYPE html>
 fn main() {
     setup_logging();
 
-    let config = AgentConfig::from_env();
-    info!("DesktopWork starting");
-    info!("  Server entry: {:?}", config.server_entry);
-    info!("  HTTP port: {}", config.http_port);
-    info!("  Runner: {}", if config.is_ts_source() { "tsx" } else { "node" });
-
-    let server_entry = config.server_entry.clone();
-    let http_port = config.http_port;
-    let base_url = config.base_url();
-    drop(config);
-
-    let node_process = Arc::new(NodeProcess::new(http_port, base_url.clone()));
-    let node_process_for_state = Arc::clone(&node_process);
-    let node_process_for_async = Arc::clone(&node_process);
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(AppState {
-            node_process: node_process_for_state,
-        })
-        .setup(move |app| {
+        .setup(|app| {
             let handle = app.app_handle().clone();
-            let entry = server_entry;
-            let node_proc = node_process_for_async;
-            let agent_config = AgentConfig {
-                server_entry: entry,
-                http_port,
-            };
+
+            // Resolve runtime paths now that we have an AppHandle (so resource_dir is available).
+            // In debug builds this also reads DESKTOPWORK_DEV_ENTRY.
+            let agent_config = AgentConfig::build(&handle);
+
+            info!("DesktopWork starting");
+            info!("  Mode: {}", if cfg!(debug_assertions) { "dev" } else { "prod (sidecar)" });
+            info!("  Server entry: {:?}", agent_config.server_entry);
+            info!("  Node runner: {:?}", agent_config.node_runner);
+            info!("  HTTP port: {}", agent_config.http_port);
+
+            let node_proc = Arc::new(NodeProcess::new(agent_config.http_port, agent_config.base_url()));
+            let node_proc_for_menu = Arc::clone(&node_proc);
+            app.manage(AppState { node_process: node_proc_for_menu });
 
             // Step 1: Create window IMMEDIATELY with embedded splash HTML.
             // This prevents the black OS window from showing.
@@ -327,9 +385,10 @@ fn main() {
             .map_err(|e| format!("Failed to create window: {}", e))?;
 
             // Step 2: Start Node HTTP server in background, then navigate
+            let node_proc_for_async = Arc::clone(&node_proc);
             tauri::async_runtime::spawn(async move {
                 // Start Node process
-                if let Err(e) = node_proc.start(&agent_config).await {
+                if let Err(e) = node_proc_for_async.start(&agent_config).await {
                     error!("Failed to start Node process: {}", e);
                     // Show error in the webview
                     let _ = window.eval(&format!(
@@ -340,13 +399,13 @@ fn main() {
                 }
 
                 // Step 3: Node is ready — navigate to the actual app
-                let navigate_js = format!("window.location.href = '{}';", node_proc.base_url);
+                let navigate_js = format!("window.location.href = '{}';", node_proc_for_async.base_url);
                 if let Err(e) = window.eval(&navigate_js) {
                     error!("Failed to navigate to app: {}", e);
                 }
 
                 // Set up close handler after window is ready
-                let node_proc2 = Arc::clone(&node_proc);
+                let node_proc2 = Arc::clone(&node_proc_for_async);
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::CloseRequested { .. } = event {
                         let np = Arc::clone(&node_proc2);

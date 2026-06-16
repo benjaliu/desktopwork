@@ -11,209 +11,122 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: dmg
+            node-tarball-platform: darwin-x64
+            node-binary-suffix: -x86_64-apple-darwin
+          - platform: windows-latest
+            target: nsis
+            node-tarball-platform: windows-x64
+            node-binary-suffix: -x86_64-pc-windows-msvc.exe
+    runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain-channel: "stable"
-
-      - name: Setup Node
+      # === 1. 工具链 ===
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: "22"
 
-      - name: Install pnpm
+      - name: Setup pnpm
         run: npm install -g pnpm
-
-      # Install shell deps (tauri cli)
-      - name: Install shell deps
-        run: pnpm install --no-lockfile --ignore-scripts
-        working-directory: shell
-
-      # Install desktop-agent deps (includes @openclaw/* from workspace)
-      - name: Install desktop-agent deps
-        run: pnpm install --no-lockfile --ignore-scripts
-        working-directory: desktop-agent
-
-      # Lint = tsc --noEmit (待加 biome/eslint)
-      - name: Lint
-        run: pnpm run typecheck
-        working-directory: desktop-agent
-
-      # TypeScript type-check then compile to JavaScript
-      - name: Compile TypeScript
-        run: pnpm run build
-        working-directory: desktop-agent
-
-      - name: Deploy server bundle (auto-collects all deps incl. claude binary)
-        run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
-        working-directory: .
-
-      - name: Setup Rust environment
-        run: |
-          # Try multiple possible Rust env locations on Windows
-          if [ -f "$HOME/.cargo/env" ]; then
-            . "$HOME/.cargo/env"
-          elif [ -f "$HOME/.rustup/env" ]; then
-            . "$HOME/.rustup/env"
-          elif [ -f "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
-            . "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
-          elif [ -f "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
-            . "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
-          fi
-          echo "Rust version: $(rustc --version 2>/dev/null || echo 'not found')"
-          echo "Cargo version: $(cargo --version 2>/dev/null || echo 'not found')"
-        shell: bash
-
-      - name: Debug Tauri setup
-        run: |
-          . "$HOME/.cargo/env"
-          pnpm tauri --version
-          pnpm tauri info --config src-tauri/tauri.conf.json 2>&1 || echo "tauri info failed with exit code $?"
-          ls -la src-tauri/ 2>&1
-          ls -la src-tauri/server/ 2>&1 | head -10
-          ls -la src-tauri/server/dist/ 2>&1 | head -5 || echo "server/dist not found"
-          ls -la src-tauri/target/ 2>&1 | head -5
-        working-directory: shell
-
-      - name: Build Tauri (Windows)
-        run: |
-          # Try multiple possible Rust env locations on Windows
-          if [ -f "$HOME/.cargo/env" ]; then
-            . "$HOME/.cargo/env"
-          elif [ -f "$HOME/.rustup/env" ]; then
-            . "$HOME/.rustup/env"
-          elif [ -f "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
-            . "D:/a/_work/_tool/Rustup/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
-          elif [ -f "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env" ]; then
-            . "C:/hostedtoolcache/Rust/msstable-x86_64-pc-windows-msvc/current/.cargo/env"
-          fi
-          set -o pipefail
-          pnpm tauri build --config src-tauri/tauri.conf.json --verbose 2>&1 | tee /tmp/tauri-build-log.txt
-        working-directory: shell
-
-      - name: Upload Windows build log
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: tauri-build-log-windows
-          path: /tmp/tauri-build-log.txt
-          retention-days: 7
-
-      - name: Upload Windows exe
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktopwork-windows
-          path: shell/src-tauri/target/release/bundle/nsis/*.exe
-          retention-days: 7
-
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      # === 2. Node sidecar binary 下载 + cache ===
+      # Tauri 2 在 bundle 时把 externalBin 里的 `node` 重命名为
+      # `node-{target-triple}{.exe}`（windows 加 .exe）。CI 必须把下载下来的
+      # Node 二进制保存成 tauri-build 在 build.rs 期能找到的文件名。
+      - name: Download Node.js binary
+        run: |
+          NODE_VERSION="22.3.0"
+          NODE_PLATFORM="${{ matrix.node-tarball-platform }}"
+          BINARY_SUFFIX="${{ matrix.node-binary-suffix }}"
+          TARBALL="node-v${NODE_VERSION}-${NODE_PLATFORM}"
+          mkdir -p shell/node-binaries
+          FINAL_NAME="shell/node-binaries/node${BINARY_SUFFIX}"
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            # Windows 用 zip —— node.exe 是顶层目录里的唯一二进制
+            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.zip" -o /tmp/node.zip
+            unzip -j /tmp/node.zip "${TARBALL}/node.exe" -d shell/node-binaries/
+            # 重命名为 tauri-build 期望的 target-triple 名字
+            mv "shell/node-binaries/node.exe" "$FINAL_NAME"
+            rm /tmp/node.zip
+          else
+            # macOS / Linux 用 tar.xz
+            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" -o /tmp/node.tar.xz
+            tar -xJf /tmp/node.tar.xz -C /tmp
+            # 重命名为 tauri-build 期望的 target-triple 名字
+            mv "/tmp/${TARBALL}/bin/node" "$FINAL_NAME"
+            chmod +x "$FINAL_NAME"
+            rm /tmp/node.tar.xz
+          fi
+
+          echo "=== Node binary installed ==="
+          ls -la shell/node-binaries/
+          "$FINAL_NAME" --version || true
+
+      - name: Cache Node.js binary
+        uses: actions/cache@v4
         with:
-          toolchain-channel: "stable"
+          path: shell/node-binaries/
+          key: node-v22.3.0-${{ matrix.target }}
+          restore-keys: |
+            node-v22-
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
+      # === 3. 装依赖 ===
+      - name: Install workspace deps
+        run: pnpm install --ignore-scripts
+        # ★ 不带 --no-lockfile，保证可重现
 
-      - name: Install pnpm
-        run: npm install -g pnpm
+      # === 4. 编译 + 验证 desktop-agent ===
+      - name: Typecheck
+        run: pnpm -F desktop-agent typecheck
 
-      - name: Install shell deps
-        run: pnpm install --no-lockfile --ignore-scripts
-        working-directory: shell
+      - name: Build desktop-agent
+        run: pnpm -F desktop-agent build
+        # 产出 desktop-agent/dist/
 
-      - name: Install desktop-agent deps
-        run: pnpm install --no-lockfile --ignore-scripts
-        working-directory: desktop-agent
+      # === 5. 准备 bundle 资源（关键步骤） ===
+      - name: Deploy server bundle to shell
+        run: |
+          # ★ pnpm deploy 把 dist/、node_modules/、package.json、apps/ 全塞到 shell/src-tauri/server/
+          pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
+          echo "=== server bundle size ==="
+          du -sh shell/src-tauri/server
+          echo "=== server bundle contents ==="
+          ls shell/src-tauri/server/
+          echo "=== expected: dist/ node_modules/ package.json apps/ ==="
+          echo "=== Claude SDK binary present? ==="
+          find shell/src-tauri/server/node_modules/@anthropic-ai -name "claude" -type f
 
-      # Lint = tsc --noEmit (待加 biome/eslint)
-      - name: Lint
-        run: pnpm run typecheck
-        working-directory: desktop-agent
-
-      - name: Compile TypeScript
-        run: pnpm run build
-        working-directory: desktop-agent
-
-      - name: Deploy server bundle (auto-collects all deps incl. claude binary)
-        run: pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
-        working-directory: .
-
-      - name: Setup Rust environment (macOS)
+      # === 6. tauri build（产 installer） ===
+      - name: Build Tauri app
         run: |
           . "$HOME/.cargo/env"
-          echo "Rust version: $(rustc --version)"
-          echo "Cargo version: $(cargo --version)"
-        shell: bash
+          # ★ 用绝对路径指 config，避免 working-directory 不一致
+          cargo tauri build --config shell/src-tauri/tauri.conf.json --verbose
+        # ★ Tauri CLI 看到 bundle.externalBin = ["../node-binaries/node"]
+        #   会自动找 shell/node-binaries/node-{当前 target triple}{.exe}
+        #   并在 bundle 时重命名为 node-{target-triple} 复制到 resource_dir
 
-      - name: Debug Tauri setup (macOS)
-        run: |
-          . "$HOME/.cargo/env"
-          echo "=== Node version ==="
-          node --version
-          echo "=== npm version ==="
-          npm --version
-          echo "=== pnpm version ==="
-          pnpm --version
-          echo "=== tauri cli version ==="
-          pnpm tauri --version 2>&1 || echo "tauri cli version failed"
-          echo "=== rustc version ==="
-          rustc --version
-          echo "=== cargo version ==="
-          cargo --version
-          echo "=== running tauri info ==="
-          pnpm tauri info 2>&1 || echo "tauri info failed with exit code $?"
-          echo "=== src-tauri contents ==="
-          ls -la src-tauri/ 2>&1
-          echo "=== src-tauri/server contents ==="
-          ls -la src-tauri/server/ 2>&1 | head -10
-          echo "=== src-tauri/server/dist contents ==="
-          ls -la src-tauri/server/dist/ 2>&1 | head -5 || echo "server/dist not found"
-          echo "=== src-tauri/target contents ==="
-          ls -la src-tauri/target/ 2>&1 | head -5
-        working-directory: shell
-
-      - name: Build Tauri (macOS)
-        run: |
-          . "$HOME/.cargo/env"
-          set -o pipefail
-          pnpm tauri build --config src-tauri/tauri.conf.json --verbose 2>&1 | tee /tmp/tauri-build-log.txt
-        working-directory: shell
-
-      - name: Build log on failure
-        if: failure()
-        run: |
-          . "$HOME/.cargo/env"
-          echo "=== Build failed, capturing diagnostics ==="
-          pnpm tauri info 2>&1 || true
-          ls -la src-tauri/ 2>&1 || true
-          ls -la src-tauri/server/dist/ 2>&1 || true
-        working-directory: shell
-
-      - name: Upload macOS build log
-        if: failure()
+      # === 7. 上传产物 ===
+      - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: tauri-build-log-macos
-          path: /tmp/tauri-build-log.txt
-          retention-days: 7
-
-      - name: Upload macOS dmg
-        uses: actions/upload-artifact@v4
-        with:
-          name: desktopwork-macos
-          path: shell/src-tauri/target/release/bundle/dmg/*.dmg
-          retention-days: 7
+          name: desktopwork-${{ matrix.target }}
+          path: |
+            shell/src-tauri/target/release/bundle/${{ matrix.target }}/*.exe
+            shell/src-tauri/target/release/bundle/${{ matrix.target }}/*.dmg
+          if-no-files-found: error

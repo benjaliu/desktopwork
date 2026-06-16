@@ -3,9 +3,7 @@
   "productName": "DesktopWork",
   "version": "0.1.0",
   "identifier": "com.benjamin.desktopwork",
-  "build": {
-    "frontendDist": "server/dist"
-  },
+  "build": {},
   "app": {
     "windows": [
       {
@@ -36,6 +34,9 @@
     ],
     "resources": [
       "server"
+    ],
+    "externalBin": [
+      "../node-binaries/node"
     ],
     "windows": {
       "nsis": {

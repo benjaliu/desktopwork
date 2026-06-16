@@ -5,6 +5,9 @@
 # Bundled server (populated by GitHub Actions build, not tracked in git)
 shell/src-tauri/server/
 
+# Node binary sidecars (downloaded by GitHub Actions workflow, not tracked in git)
+shell/node-binaries/
+
 
 # Node modules
 node_modules/

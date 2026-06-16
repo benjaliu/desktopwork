@@ -122,17 +122,41 @@ jobs:
         # 产出 desktop-agent/dist/
 
       # === 5. 准备 bundle 资源（关键步骤） ===
-      - name: Deploy server bundle to shell
+      - name: Deploy server bundle to shell (v0.3.1.8 shamefully-hoist)
         run: |
-          # ★ pnpm deploy 把 dist/、node_modules/、package.json、apps/ 全塞到 shell/src-tauri/server/
-          pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
+          # ★ v0.3.1.8: 不用 pnpm deploy（生成 symlink，NSIS 提取时丢失）
+          # 改用 cp dist + pnpm install --shamefully-hoist 物理化所有 deps
+          # 理由：见 docs/technical/TECH-DESIGN.md §9.13.17
+
+          rm -rf shell/src-tauri/server
+          mkdir -p shell/src-tauri/server
+          cp -r desktop-agent/dist shell/src-tauri/server/dist
+          cp desktop-agent/package.json shell/src-tauri/server/package.json
+
+          cd shell/src-tauri/server
+          # --shamefully-hoist 强制所有 deps 提升到 node_modules/ 顶层（npm-style，零 symlink）
+          # 跨平台一致：macOS DMG / Linux deb-rpm / Windows NSIS 行为相同
+          pnpm install --prod --shamefully-hoist
+
+          cd ../..
           echo "=== server bundle size ==="
           du -sh shell/src-tauri/server
-          echo "=== server bundle contents ==="
+          echo "=== server bundle top-level ==="
           ls shell/src-tauri/server/
-          echo "=== expected: dist/ node_modules/ package.json apps/ ==="
+          echo "=== expected: dist/ node_modules/ package.json（无 src/ scripts/ apps/） ==="
+          echo "=== express sanity check (must be physical dir, not symlink) ==="
+          if [ -d shell/src-tauri/server/node_modules/express ] && [ ! -L shell/src-tauri/server/node_modules/express ]; then
+            echo "✅ express is a PHYSICAL directory (NSIS-safe)"
+            test -f shell/src-tauri/server/node_modules/express/package.json && echo "✅ express/package.json exists"
+          else
+            echo "❌ express is symlink or missing!"
+            ls -la shell/src-tauri/server/node_modules/express
+            exit 1
+          fi
+          echo "=== node_modules top-level (no .pnpm/ should appear) ==="
+          ls shell/src-tauri/server/node_modules/ | head -30
           echo "=== Claude SDK binary present? ==="
-          find shell/src-tauri/server/node_modules/@anthropic-ai -name "claude" -type f
+          find shell/src-tauri/server/node_modules/@anthropic-ai -name "claude" -type f | head -3
         shell: bash
 
       # === 6. tauri build（产 installer） ===

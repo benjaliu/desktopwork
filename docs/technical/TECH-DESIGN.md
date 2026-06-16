@@ -2259,6 +2259,7 @@ async function checkConfig() {
 | 12 | （未预料） | **`externalBin` 用裸基础名 `node`，Tauri 2 自动追加 `-<target-triple>`** | Tauri 2 不支持 `${platform}` 占位符（v0.3.1.1 实测发现）| 一直保持 |
 | 13 | （未预料） | **`node-tarball-platform` matrix 值用 `win-x64`（不是 `windows-x64`）** | nodejs.org 官方 tarball 命名是 `win-x64`（v0.3.1.2 实测发现）| 一直保持 |
 | 14 | （未预料） | **CI step 加 `set -euo pipefail` + cache 优先 + 文件大小校验** | download step 静默失败 / cache 覆盖新文件 / 404 HTML 混入（v0.3.1.3 实测发现）| 一直保持 |
+| 15 | （未预料） | **删除 `. "$HOME/.cargo/env"`** | Windows Git Bash 上 `~/.cargo/env` 不存在，主动 fail；dtolnay/rust-toolchain@stable 已自动加 cargo 到 PATH（v0.3.1.4 实测发现）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -2974,6 +2975,51 @@ CI 第三次跑 v0.3.1.2 暴露第四个问题。tauri-build 报 exit 1，本地
 4. ✅ **关键 step 前后加 debug output**：失败时省一个小时猜
 5. ✅ **Tauri 2 sidecar 文件名拼接规则实测**：`externalBin: ["node"]` + cargo target triple → `node-{triple}`（Unix）/`node-{triple}.exe`（Windows）。CI 下载的 binary 必须严格匹配此规则，否则 tauri-build 在 `target/release/build/...` 阶段报 `ResourcePathNotFound`
 
+#### 9.13.13 v0.3.1.4 实测修正（2026-06-16）
+
+CI 第四次跑 v0.3.1.3 暴露第五个问题。Windows runner 报 `cargo: command not found` 变体。
+
+**问题 E：`. "$HOME/.cargo/env"` 在 Windows runner 主动 fail**
+
+- **症状**：CI run #27593979580 Windows runner 报：
+  ```
+  D:\a\_temp\...sh: line 1: /c/Users/runneradmin/.cargo/env: No such file or directory
+  ```
+- **根因**：
+  - 之前为了防御性手动 source cargo env（确保 cargo 在 PATH）
+  - macOS runner 上 `$HOME/.cargo/env` 存在，能 source 成功
+  - **Windows runner 上 Git Bash 路径 `/c/Users/runneradmin/.cargo/env` 不存在**——`dtolnay/rust-toolchain@stable` 在 Windows 上不生成 `env` 文件，只加 `~/.cargo/bin` 到 PATH
+  - 结果：source 失败（exit 1）但 bash 脚本继续执行，cargo 命令还是没找到
+- **修正**：**删掉 `. "$HOME/.cargo/env"` 这行**。`dtolnay/rust-toolchain@stable` 会在所有后续 step 把 cargo 加到 PATH。不需要手动 source。
+- **学习**：
+  1. ✅ **`dtolnay/rust-toolchain@stable` 会自动把 `~/.cargo/bin` 加到 PATH**，不需 source env
+  2. ✅ **不要在 CI 里手动 `. "$HOME/.cargo/env"`**：macOS 上冗余，Windows 上 break
+  3. ✅ **Windows Git Bash 上 `~/.cargo/env` 不存在**（不是所有人手装 rustup 都会生成）
+  4. ✅ **为什么本地能跑**：本地手动 `cargo install tauri-cli` 是独立的安装路径，不依赖 PATH env
+
+**修正后 Build Tauri step**：
+
+```yaml
+- name: Build Tauri app
+  run: |
+    # dtolnay/rust-toolchain@stable 已把 cargo 加到 PATH
+    # 不需 source .cargo/env（macOS 上冗余、Windows 上 break）
+    cargo tauri build --config shell/src-tauri/tauri.conf.json --verbose
+  shell: bash
+```
+
+**为什么不需 `tauri-action`**：
+
+原 §9.13.1 Gap 8 决定：CI 用 `cargo tauri build` 而非 `tauri-apps/tauri-action@v0`。理由：
+- tauri-action 是高层封装，限制多（固定的 bundle 流程）
+- 我们要自定义 `bundle.externalBin` + `bundle.resources`，tauri-action 不友好
+- 直接 `cargo tauri build` 可控性高，跟设计文档一致
+
+**如果未来要用 tauri-action**（v0.2 重新评估）：
+- 它内部自动处理 PATH 跨平台差异
+- 代价：上传 release 的流程被它绑定，不能自定义 artifact 名字
+- v0.1 还是直接 `cargo tauri build`
+
 
 
 
@@ -3541,4 +3587,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.3 | **CI 第三次跑后实测修正（fail-fast + cache 顺序）**：（1）§9.13.12 新增，记录 CI run #27592902583 macOS+Windows runner 都报 `failed to run custom build command` 的诊断；（2）问题 D：3 个叠加坑——download step 没 `set -euo pipefail`（错逽静默）、cache 在 download 之后会覆盖新文件、没文件大小校验；（3）修正 4 点：step 顶部加 `set -euo pipefail`、重排顺序（先 cache 再 download）、加 size 校验（≥1MB）、加 debug step（打印 pwd + ls）；（4）§9.13.1 修正总览表新增 Gap 14（CI step 静默失败）；（5）学习：CI bash step 必加 `set -euo pipefail`，cache 必在 download 之前，下载必校验大小，debug step 必加在关键 step 前后 |
+| 2026-06-16 | 0.3.1.4 | **CI 第四次跑后实测修正（删 cargo env source）**：（1）§9.13.13 新增，记录 CI run #27593979580 Windows runner 报 `~/.cargo/env: No such file or directory` 的诊断；（2）问题 E：手动 `. "$HOME/.cargo/env"` 在 Windows Git Bash 上 `~/.cargo/env` 不存在（dtolnay 在 Windows 不生成 env 文件），主动 fail；macOS 上冗余；（3）修正：删掉 `. "$HOME/.cargo/env"` 这行，`dtolnay/rust-toolchain@stable` 已自动把 `~/.cargo/bin` 加到 PATH；（4）§9.13.1 修正总览表新增 Gap 15（cargo env source）；（5）学习：dtolnay/rust-toolchain@stable 跨平台自动加 PATH，不需手动 source；不要在 CI 里写 `. "$HOME/.cargo/env"`

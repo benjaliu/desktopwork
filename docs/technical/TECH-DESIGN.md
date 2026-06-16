@@ -2260,6 +2260,7 @@ async function checkConfig() {
 | 13 | （未预料） | **`node-tarball-platform` matrix 值用 `win-x64`（不是 `windows-x64`）** | nodejs.org 官方 tarball 命名是 `win-x64`（v0.3.1.2 实测发现）| 一直保持 |
 | 14 | （未预料） | **CI step 加 `set -euo pipefail` + cache 优先 + 文件大小校验** | download step 静默失败 / cache 覆盖新文件 / 404 HTML 混入（v0.3.1.3 实测发现）| 一直保持 |
 | 15 | （未预料） | **删除 `. "$HOME/.cargo/env"`** | Windows Git Bash 上 `~/.cargo/env` 不存在，主动 fail；dtolnay/rust-toolchain@stable 已自动加 cargo 到 PATH（v0.3.1.4 实测发现）| 一直保持 |
+| 16 | （未预料） | **用 `wc -c` 代替 `stat -c%s`** | macOS BSD stat 不认 `-c` 选项；`wc -c < file` 跨平台一致（v0.3.1.5 实测发现）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3020,6 +3021,44 @@ CI 第四次跑 v0.3.1.3 暴露第五个问题。Windows runner 报 `cargo: comm
 - 代价：上传 release 的流程被它绑定，不能自定义 artifact 名字
 - v0.1 还是直接 `cargo tauri build`
 
+#### 9.13.14 v0.3.1.5 实测修正（2026-06-16）
+
+CI 第五次跑 v0.3.1.4 暴露第六个问题。macOS runner 报 `stat: illegal option -- c`。
+
+**问题 F：`stat -c%s` 是 GNU stat 语法，macOS BSD stat 不支持**
+
+- **症状**：CI run #275...（v0.3.1.4 后），macOS runner 报：
+  ```
+  stat: illegal option -- c
+  usage: stat [-FLnq] [-f format | -l | -r | -s | -x] [-t timefmt] [file ...]
+  ```
+- **根因**：`stat` 命令跨平台语法不统一：
+  | 平台 | 语法 | 示例 |
+  |------|------|------|
+  | Linux（GNU coreutils）| `-c%s` | `stat -c%s file` |
+  | macOS（BSD）| `-f%z` | `stat -f%z file` |
+  | Windows Git Bash（MSYS2 GNU coreutils）| `-c%s` | `stat -c%s file` |
+- **修正**：用 `wc -c < file` 代替 `stat -c%s file`——`wc -c` 在三个平台都输出字节数，true 跨平台 portable
+- **修正后**：
+  ```bash
+  # ★ v0.3.1.5：用 wc -c 代替 stat -c%s（macOS BSD stat 不认 -c）
+  SIZE=$(wc -c < "$FINAL_NAME" | tr -d ' \n')
+  if [[ "$SIZE" -lt 1000000 ]]; then
+    echo "::error::Downloaded Node binary is $SIZE bytes (< 1MB), probably 404 or empty"
+    file "$FINAL_NAME" 2>/dev/null || true
+    head -c 200 "$FINAL_NAME" 2>/dev/null || true
+    exit 1
+  fi
+  ```
+  `tr -d ' \n'` 处理 `wc` 可能的 leading whitespace 和 newline。
+
+**学习（避免下次再踩）**：
+
+1. ✅ **`stat` 跨平台不统一**——Linux 写 `stat -c%s file`，macOS 写 `stat -f%z file`
+2. ✅ **`wc -c < file` 是真正 portable 的**——三个平台都输出字节数
+3. ✅ **CI bash 脚本要避免 GNU 专属语法**：能 cross-platform 写就 cross-platform 写
+4. ✅ **macOS / Linux 跨平台脚本基本 all on 官方 POSIX 集合**：coreutils/awk/grep 跨平台一致，`stat/date/find` 有差异
+
 
 
 
@@ -3587,4 +3626,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.4 | **CI 第四次跑后实测修正（删 cargo env source）**：（1）§9.13.13 新增，记录 CI run #27593979580 Windows runner 报 `~/.cargo/env: No such file or directory` 的诊断；（2）问题 E：手动 `. "$HOME/.cargo/env"` 在 Windows Git Bash 上 `~/.cargo/env` 不存在（dtolnay 在 Windows 不生成 env 文件），主动 fail；macOS 上冗余；（3）修正：删掉 `. "$HOME/.cargo/env"` 这行，`dtolnay/rust-toolchain@stable` 已自动把 `~/.cargo/bin` 加到 PATH；（4）§9.13.1 修正总览表新增 Gap 15（cargo env source）；（5）学习：dtolnay/rust-toolchain@stable 跨平台自动加 PATH，不需手动 source；不要在 CI 里写 `. "$HOME/.cargo/env"`
+| 2026-06-16 | 0.3.1.5 | **CI 第五次跑后实测修正（stat 跨平台语法）**：（1）§9.13.14 新增，记录 macOS runner 报 `stat: illegal option -- c` 的诊断；（2）问题 F：`stat -c%s` 是 GNU stat 语法，macOS BSD stat 不支持；用 `stat -f%z` 又跟 Windows 不一致；（3）修正：用 `wc -c < file | tr -d ' \n'` 跨平台 portable，true 跨平台一致；（4）§9.13.1 修正总览表新增 Gap 16（stat 跨平台）；（5）学习：CI bash 避免 GNU 专属语法，coreutils 跨平台有差异（stat / date / find），wc/awk/grep 跨平台一致

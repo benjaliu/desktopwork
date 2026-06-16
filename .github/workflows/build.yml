@@ -87,7 +87,8 @@ jobs:
           fi
 
           # ★ size 校验：真 Node binary ≥ 50MB，404 HTML 才 14 字节
-          SIZE=$(stat -c%s "$FINAL_NAME")
+          # ★ v0.3.1.5: 用 wc -c 代替 stat -c%s（macOS BSD stat 不认 -c）
+          SIZE=$(wc -c < "$FINAL_NAME" | tr -d ' \n')
           if [[ "$SIZE" -lt 1000000 ]]; then
             echo "::error::Downloaded Node binary is $SIZE bytes (< 1MB), probably 404 or empty"
             file "$FINAL_NAME" 2>/dev/null || true

@@ -409,6 +409,7 @@ fn main() {
             // This prevents the black OS window from showing.
             // data URL loads instantly without any network request.
             let splash_url = format!("data:text/html,{}", urlencoding::encode(SPLASH_HTML));
+            info!("Splash URL length: {} bytes", splash_url.len());
             let window = WebviewWindowBuilder::new(
                 &handle,
                 "main",
@@ -420,7 +421,13 @@ fn main() {
             .center()
             .resizable(true)
             .build()
-            .map_err(|e| format!("Failed to create window: {}", e))?;
+            .map_err(|e| {
+                // ★ v0.3.1.16: log build error to file before propagating
+                // (panic messages go to invisible stderr in GUI app)
+                let err = format!("Failed to create window: {}", e);
+                error!("{}", err);
+                err
+            })?;
 
             // Step 2: Start Node HTTP server in background, then navigate
             let node_proc_for_async = Arc::clone(&node_proc);

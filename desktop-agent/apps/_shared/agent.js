@@ -33,7 +33,7 @@ const agent = {
     const decoder = new TextDecoder();
     let buffer = '';
     let fullText = '';
-    let sessionId = null;
+    // sessionId is already declared in the function parameter destructure; reassign instead of let.
 
     try {
       while (true) {

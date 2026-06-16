@@ -24,10 +24,11 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// CreateProcess + Rust on Windows 不友好接受这个前缀。
 /// 详见 docs/technical/TECH-DESIGN.md §9.13.16
 fn strip_unc_prefix(path: &Path) -> PathBuf {
+    // str::strip_prefix returns Option<&str>, so use unwrap_or (0-arg) not unwrap_or_else
     path.to_string_lossy()
         .strip_prefix(r"\\?\")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| path.to_path_buf())
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 // === Target triple helper (Tauri 2 sidecar renames externalBin to <name>-<target-triple>) ===

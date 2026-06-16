@@ -3302,6 +3302,7 @@ package.json   ← Node 解析入口
 11. ✅ **跨工具链（pnpm vs npm）默认行为差异巨大**——pnpm 默认 symlink 布局，npm 默认 hoisted 布局；CI 脚本优先用最通用工具，跨版本稳定
 12. ✅ **pnpm 和 npm peer dep 行为差异**——pnpm auto-install-peers + warn 跳过，npm v7+ strict ERESOLVE；切换工具链时加 `--legacy-peer-deps` 兼容
 13. ✅ **transitive peer dep 版本冲突**——`@anthropic-ai/claude-agent-sdk@0.3.178` 要 zod@^4，但顶层要 zod@^3；用 `--legacy-peer-deps` 临时绕开，长期需 SDK 升版或 zod 升级
+14. ✅ **`Option::unwrap_or_else` vs `Result::unwrap_or_else` 参数数量不同**（0 vs 1），subagent 不编译直接 commit → v0.3.1.7/14 踩坑；写完代码必须 cargo check 验证
 
 **调试手册**（Windows installer 缺依赖第一看哪里）：
 

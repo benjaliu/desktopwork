@@ -2258,6 +2258,7 @@ async function checkConfig() {
 | 11 | （未预料） | **所有 CI `run:` step 加 `shell: bash`** | Windows runner 默认是 PowerShell，不认 bash `if [[ ]]`（v0.3.1.1 实测发现）| 一直保持 |
 | 12 | （未预料） | **`externalBin` 用裸基础名 `node`，Tauri 2 自动追加 `-<target-triple>`** | Tauri 2 不支持 `${platform}` 占位符（v0.3.1.1 实测发现）| 一直保持 |
 | 13 | （未预料） | **`node-tarball-platform` matrix 值用 `win-x64`（不是 `windows-x64`）** | nodejs.org 官方 tarball 命名是 `win-x64`（v0.3.1.2 实测发现）| 一直保持 |
+| 14 | （未预料） | **CI step 加 `set -euo pipefail` + cache 优先 + 文件大小校验** | download step 静默失败 / cache 覆盖新文件 / 404 HTML 混入（v0.3.1.3 实测发现）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -2912,6 +2913,67 @@ matrix:
 3. ✅ **先 curl -sI 验证 URL 再写 CI**（`curl -sI https://nodejs.org/dist/v22.3.0/node-v22.3.0-win-x64.zip` 应返 200）
 4. ✅ **混淆点**：nodejs.org tarball 后缀（`win-x64`）≠ 我们的 platform 标识（`windows-x64`）≠ cargo target triple（`x86_64-pc-windows-msvc`）—— **三套命名系统不要混**
 
+#### 9.13.12 v0.3.1.3 实测修正（2026-06-16）
+
+CI 第三次跑 v0.3.1.2 暴露第四个问题。tauri-build 报 exit 1，本地 WSL 复现 OK，CI fail。
+
+**问题 D：CI download step 静默失败**
+
+- **症状**：CI run #27592902583，macOS + Windows runner 都报 `failed to run custom build command`，exit status 1。
+- **本地复现**：`cargo tauri build --config shell/src-tauri/tauri.conf.json` 在 WSL 跑成功（2m 36s）。说明设计本身没错。
+- **根因**（3 个叠加坑）：
+  1. **step 脚本没有 `set -euo pipefail`**：如果 `tar` 失败（BSD tar 跟 GNU tar 差异、`xz` 缺失等），后续 `mv` 找不到源文件失败，但因为没开 `set -e`，脚本不退出。`ls` 输出空目录，`"$FINAL_NAME" --version || true` 被 `|| true` 掩着，下游根本看不到报错
+  2. **step 顺序错了**：当前先 download 再 cache。cache hit 时 `actions/cache` 会**覆盖**刚 download 的文件——如果之前的 failed run 缓存了空文件，就会被错误地恢复
+  3. **没有文件大小校验**：404 HTML 是 14 字节，真 Node binary 是 50MB+。不校验就不知道下载有没有拿到真的
+- **修正**：
+  1. step 顶部加 `set -euo pipefail`（任何错误立刻退出）
+  2. **重排顺序**：先 cache，再 download（且只在 `cache-hit != 'true'` 时）
+  3. **加 size 校验**：下载后检查 `stat -c%s` 必须 ≥ 1MB（真 binary 至少 50MB）
+  4. 加 debug step 在 tauri build 之前打印 `pwd` + `ls -la shell/node-binaries/`，失败时一眼看出是 file 缺失还是别的问题
+
+**修正后的正确 step 顺序**：
+
+```yaml
+- name: Cache Node.js binary
+  id: cache-node
+  uses: actions/cache@v4
+  with:
+    path: shell/node-binaries/
+    key: node-v22.3.0-${{ matrix.target }}
+    restore-keys: |
+      node-v22-
+
+- name: Download Node.js binary
+  if: steps.cache-node.outputs.cache-hit != 'true'   # ★ 只在 cache miss 时下
+  run: |
+    set -euo pipefail                                # ★ fail-fast
+    ...download + extract + mv...
+    SIZE=$(stat -c%s "$FINAL_NAME")
+    if [[ "$SIZE" -lt 1000000 ]]; then
+      echo "ERROR: $FINAL_NAME is $SIZE bytes, expected ≥1MB"
+      exit 1
+    fi
+  shell: bash
+
+- name: Debug before tauri build
+  run: |
+    echo "=== pwd ==="
+    pwd
+    echo "=== shell/node-binaries/ ==="
+    ls -la shell/node-binaries/
+    echo "=== file type check ==="
+    file shell/node-binaries/node* 2>/dev/null || echo "no files matching node*"
+  shell: bash
+```
+
+**学习（避免下次再踩）**：
+
+1. ✅ **CI bash step 必加 `set -euo pipefail`**：默认值不 fail-fast，错逽静默走完全步
+2. ✅ **cache 步骤要在 download 之前**：避免 cache 覆盖新下载的文件
+3. ✅ **下载后必校验文件大小**：14 字节 = 100% 404；1MB 以下 = 100% 错
+4. ✅ **关键 step 前后加 debug output**：失败时省一个小时猜
+5. ✅ **Tauri 2 sidecar 文件名拼接规则实测**：`externalBin: ["node"]` + cargo target triple → `node-{triple}`（Unix）/`node-{triple}.exe`（Windows）。CI 下载的 binary 必须严格匹配此规则，否则 tauri-build 在 `target/release/build/...` 阶段报 `ResourcePathNotFound`
+
 
 
 
@@ -3479,4 +3541,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.2 | **CI 第二次跑后实测修正**：（1）§9.13.11 新增，记录 CI run 第二次 Windows runner 报错 `End-of-central-directory signature not found` 的诊断；（2）问题 C：matrix `node-tarball-platform` 用 `windows-x64`，但 nodejs.org 官方 tarball 命名是 `win-x64`（不是 `windows-x64`），导致下载 14 字节 404 响应；（3）§9.13.10 修正后正确 matrix 改 `node-tarball-platform: win-x64`；（4）§9.13.1 修正总览表新增 Gap 13（nodejs.org tarball 命名）；（5）学习：nodejs.org 命名是 darwin/linux/**win**（不是 windows），与 cargo target triple 命名（x86_64-pc-windows-msvc）和本项目 platform 标识（windows-x64）三套不同 |
+| 2026-06-16 | 0.3.1.3 | **CI 第三次跑后实测修正（fail-fast + cache 顺序）**：（1）§9.13.12 新增，记录 CI run #27592902583 macOS+Windows runner 都报 `failed to run custom build command` 的诊断；（2）问题 D：3 个叠加坑——download step 没 `set -euo pipefail`（错逽静默）、cache 在 download 之后会覆盖新文件、没文件大小校验；（3）修正 4 点：step 顶部加 `set -euo pipefail`、重排顺序（先 cache 再 download）、加 size 校验（≥1MB）、加 debug step（打印 pwd + ls）；（4）§9.13.1 修正总览表新增 Gap 14（CI step 静默失败）；（5）学习：CI bash step 必加 `set -euo pipefail`，cache 必在 download 之前，下载必校验大小，debug step 必加在关键 step 前后 |

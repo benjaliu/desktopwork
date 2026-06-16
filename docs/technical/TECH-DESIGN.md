@@ -2263,6 +2263,7 @@ async function checkConfig() {
 | 16 | （未预料） | **用 `wc -c` 代替 `stat -c%s`** | macOS BSD stat 不认 `-c` 选项；`wc -c < file` 跨平台一致（v0.3.1.5 实测发现）| 一直保持 |
 | 17 | （未预料） | **matrix 加 macos-13 (x64) + macos-latest (ARM64) 两个 entry** | `macos-latest` 现在是 ARM64，旧 matrix 只加 x64 entry 架构不匹配（v0.3.1.6 实测发现）| 一直保持 |
 | 18 | （未预料） | **main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀** | `app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed path，`Command::new()` 历史上不友好接受；加 tracing + eprintln 兑底（v0.3.1.7 Windows 运行时发现）| 一直保持 |
+| 19 | （未预料） | **CI deploy 改用 `pnpm install --shamefully-hoist`（不用 `pnpm deploy`）** | `pnpm deploy` 生成 pnpm 内部 symlink 布局（`express -> .pnpm/express@4.22.2/...`），Windows NSIS installer 提取时**不保留 symlinks** → 运行时 `import 'express'` 找不到 package。改用 `pnpm install --shamefully-hoist` 物理化所有 deps 到 `node_modules/` 顶层（npm-style，零 symlink）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3208,6 +3209,94 @@ let sidecar_path = {
 5. Windows Event Viewer：
    - Applications and Services Logs → Application
    - 看最近有没有 .NET Runtime 或 Application Error
+
+#### 9.13.17 v0.3.1.8 Windows NSIS symlink 丢失修正（2026-06-16）
+
+Windows installer 装上后运行，Node 启动后报：
+```
+Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from ...\server\dist\router.js
+```
+
+**问题 I：NSIS installer 提取不保留 symlinks**
+
+- **症状**：
+  - 用户安装 Windows .msi/.exe installer
+  - 运行，Node 启动后报 `ERR_MODULE_NOT_FOUND: 'express'`
+  - `server/node_modules/.pnpm/` 下面**所有包都在**（有 express 4.22.2 真实目录）
+  - 但 `server/node_modules/express` 这个**symlink 丢了**——`server/node_modules/` 下只有 `.bin`、`.pnpm`、`.modules.yaml`
+  - Node 解析 `import 'express'` → 找 `server/dist/node_modules/express`（不在）→ 回退到 `server/node_modules/express`（symlink 丢失，目录不存在）→ **fail**
+- **根因**：
+  - `pnpm deploy` 部署出 pnpm 内部 symlink 布局：
+    - `server/node_modules/express` → symlink → `.pnpm/express@4.22.2/node_modules/express`
+    - `server/node_modules/cors` → symlink → `.pnpm/cors@2.8.6/node_modules/cors`
+    - `server/node_modules/zod` → symlink → `.pnpm/zod@3.25.76/node_modules/zod`
+    - `server/node_modules/.modules.yaml` 记录该 symlink 映射表
+  - Tauri 2 打包资源时是 macOS/Linux 上用 `cp -a` 保留 symlink，但 **NSIS installer 提取时用 Windows API 走 `CopyFile` 语义，symlink 丢失**（symlink 在 Windows 上需要 SeCreateSymbolicLinkPrivilege 权限，NSIS 不请求该权限）
+  - 结果：`.pnpm/express@4.22.2/node_modules/express/` 这个真目录被复制 ✅
+  - 但 `server/node_modules/express` 这个 symlink → 提取后**不存在**或变成**空目录** ❌
+  - Node 解析时**找不到入口** → 报 `ERR_MODULE_NOT_FOUND`
+- **修正**（CI deploy step）：
+
+**修正前**（v0.3.1.6）：
+```bash
+# ❶ 一次 deploy 包含 pnpm symlink 布局
+pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
+```
+
+**修正后**（v0.3.1.8）：
+```bash
+# ❶ cp dist + package.json
+mkdir -p shell/src-tauri/server
+cp -r desktop-agent/dist shell/src-tauri/server/dist
+cp desktop-agent/package.json shell/src-tauri/server/package.json
+
+# ❷ 物理化安装（不用 symlink）
+cd shell/src-tauri/server
+pnpm install --prod --shamefully-hoist
+# 重要：--shamefully-hoist 强制把所有 deps 提升到 node_modules/ 顶层（npm-style）
+# 不用 pnpm 默认的 .pnpm/ + symlink 布局
+# 结果：node_modules/express/ 是真实目录（含 package.json、lib/、index.js）
+```
+
+**预期产物**（`server/node_modules/express/`）：
+```
+History.md
+LICENSE
+index.js
+lib/
+package.json   ← Node 解析入口
+```
+
+**验证**（WSL 已验证）：
+- `pnpm install --prod --shamefully-hoist` 装 4 个 prod deps（express、cors、zod、@anthropic-ai/sdk）到独立位置
+- `node_modules/express/package.json` 是真实文件 ✅
+- `node dist/index.js` 启动成功，HTTP 200 ✅
+- `curl /api/platform/health` 返回 `{"status":"ok"}` ✅
+
+**学习（避免下次再踩）**：
+
+1. ✅ **Tauri 2 + Windows NSIS 不保留 symlinks**——resource 打包时用 `cp -a` 保留的 symlink 会在 NSIS 提取时丢失
+2. ✅ **`pnpm deploy` 默认输出 symlink 布局**——monorepo deploy 的标准输出是 `node_modules/<pkg> -> .pnpm/<pkg>@<ver>/...`
+3. ✅ **npm-style flat `node_modules` 是 symlink-free**——`--shamefully-hoist` 或显式 `pnpm install` 到独立位置生成的是真文件
+4. ✅ **installer 文件系统差异大**——macOS DMG（cp -a 保 symlink）vs Windows NSIS（symlink 丢失）vs Linux deb/rpm（cp -a 保 symlink）行为不同
+5. ✅ **为跨平台打包，优先选 `pnpm install --shamefully-hoist`**——所有 installer 平台都一致
+6. ✅ **如果 symlink 布局是必须的，用 `node --preserve-symlinks`**——但这增加复杂度、且不解决 symlink 丢失问题
+
+**调试手册**（Windows installer 缺依赖第一看哪里）：
+
+```
+1. cd %LOCALAPPDATA%\desktopwork\server\node_modules
+2. dir
+   预期：express/、cors/、zod/ 三个真实目录
+   实际：express/cors/zod 三个 symlink（not 目录）
+        → installer 丢了 symlink，是 v0.3.1.7 以前的老版本
+3. 如果是真实目录但 .pnpm/ 也在
+        → installer 正确，不需要修复
+4. 如果 express/ 是空目录或不存在
+        → installer 丢 symlink 导致的 v0.3.1.7 之前问题
+5. 看 .pnpm/express@4.22.2/node_modules/express/ 里面有没有 package.json
+   - 有 → pnpm deploy 内部 layout 装下了，只是顶层 symlink 丢了
+   - 没有 → pnpm deploy 本身失败
 ```
 
 
@@ -3777,4 +3866,5 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.7 | **Windows installer 运行时问题（UNC path 修正）**：（1）§9.13.16 新增，记录 Windows .exe 装上后运行 1s 挂掉、log 只 5 行的诊断；（2）问题 H：`app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed canonicalized path，`Command::new()` 历史上不友好接受这个前缀，导致 spawn 隐式失败；（3）3 个叠加坑：UNC prefix + GUI app stderr 不可见 + tracing_appender::non_blocking 缓冲 panic 时丢 log；（4）修正：main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀 + `eprintln!` 兑底可见性 + 关键路径同步 flush；（5）§9.13.1 修正总览表新增 Gap 18（UNC path）；（6）调试手册：Windows 运行时问题第一看 log file → 试 node.exe --version → 试 node server\dist\index.js → 检查 UNC prefix
+| 2026-06-16 | 0.3.1.7 | **Windows installer 运行时问题（UNC path 修正）**：（1）§9.13.16 新增，记录 Windows .exe 装上后运行 1s 挂掉、log 只 5 行的诊断；（2）问题 H：`app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed canonicalized path，`Command::new()` 历史上不友好接受这个前缀，导致 spawn 隐式失败；（3）3 个叠加坑：UNC prefix + GUI app stderr 不可见 + tracing_appender::non_blocking 缓冲 panic 时丢 log；（4）修正：main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀 + `eprintln!` 兑底可见性 + 关键路径同步 flush；（5）§9.13.1 修正总览表新增 Gap 18（UNC path）；（6）调试手册：Windows 运行时问题第一看 log file → 试 node.exe --version → 试 node server\dist\index.js → 检查 UNC prefix |
+| 2026-06-16 | 0.3.1.8 | **NSIS symlink 丢失修正**：（1）§9.13.17 新增，记录 Windows installer 装上后 `Cannot find package 'express'` 的诊断；（2）问题 I：`pnpm deploy` 生成 pnpm 内部 symlink 布局（`node_modules/express -> .pnpm/express@4.22.2/...`），NSIS installer 提取时**不保留 symlinks**（Windows API 不走 SeCreateSymbolicLinkPrivilege）→ Node 解析 `import 'express'` 找不到入口；（3）用户截图确认：`server/node_modules/.pnpm/` 下所有包都在，但 `server/node_modules/express` symlink 缺失（只剩 .bin .pnpm .modules.yaml）；（4）修正：CI deploy step 改用 `cp dist + cp package.json + pnpm install --prod --shamefully-hoist`（npm-style flat 物理文件，零 symlink）；（5）§9.13.1 修正总览表新增 Gap 19（NSIS symlink 丢失）；（6）WSL 端到端验证：物理文件生成 ✅，node 启动 ✅，curl /api/platform/health 200 ✅；（7）学习：跨平台 installer macOS DMG / Linux deb/rpm 用 `cp -a` 保 symlink，Windows NSIS 不保；为跨平台打包优先 `--shamefully-hoist` |

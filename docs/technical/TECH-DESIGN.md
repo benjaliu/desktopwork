@@ -2267,6 +2267,7 @@ async function checkConfig() {
 | 20 | （未预料） | **CI deploy 用 subshell 隔离 cwd** | `cd shell/src-tauri/server; cd ../..` 只回退 2 级到 `shell/`，du/ls 拼路径找不到；WSL 验证没复现，CI runner pnpm v11 表现不同。用 `subshell` 自动回 cwd，加 `set -euo pipefail` 严格 fail-fast | 一直保持 |
 | 21 | （业务决定） | **matrix 去掉 macos-13 (x64) entry** | macos-13 Intel runner 启动有问题；Apple 已全面转向 ARM64，Intel Mac 用户极少。v0.1 聚焦 ARM64 + Windows 跑通，未来按需加回 | v0.2+ 考虑加回 |
 | 22 | （未预料） | **CI deploy 改用 `npm install` 代替 `pnpm install`** | pnpm v11 + `node-linker=hoisted` + 独立位置 + subshell + `set -e` 组合下 silent fail（`68K + 无 node_modules`）。npm 默认就是 hoisted 布局，无须 flag，跨 npm/pnpm 版本一致 | 一直保持 |
+| 23 | （未预料） | **`npm install` 加 `--legacy-peer-deps`** | pnpm 默认 auto-install-peers + warn 跳过 peer conflicts；npm v7+ strict ERESOLVE 拒绝。`@anthropic-ai/claude-agent-sdk@0.3.178` 要 zod@^4，`desktop-agent` 要 zod@^3——冲突。`--legacy-peer-deps` = npm v6 行为，忽略 peer 冲突 | 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3299,6 +3300,8 @@ package.json   ← Node 解析入口
 9. ✅ **WSL + pnpm v10 ≠ CI pnpm v11**——本地验证 ok 不代表 CI 验证 ok，CI runner 默认版本变化会触发未预期 bug
 10. ✅ **subshell + `set -e` 容易 silent fail**——v0.3.1.10 踩坑，错误被吞掉；优先用显式 `cd $GITHUB_WORKSPACE`
 11. ✅ **跨工具链（pnpm vs npm）默认行为差异巨大**——pnpm 默认 symlink 布局，npm 默认 hoisted 布局；CI 脚本优先用最通用工具，跨版本稳定
+12. ✅ **pnpm 和 npm peer dep 行为差异**——pnpm auto-install-peers + warn 跳过，npm v7+ strict ERESOLVE；切换工具链时加 `--legacy-peer-deps` 兼容
+13. ✅ **transitive peer dep 版本冲突**——`@anthropic-ai/claude-agent-sdk@0.3.178` 要 zod@^4，但顶层要 zod@^3；用 `--legacy-peer-deps` 临时绕开，长期需 SDK 升版或 zod 升级
 
 **调试手册**（Windows installer 缺依赖第一看哪里）：
 

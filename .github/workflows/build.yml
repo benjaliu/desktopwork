@@ -139,8 +139,11 @@ jobs:
           # ★ 改用 npm install（默认就是 hoisted 布局，无须 flag，跨平台一致）
           # --omit=dev = --prod
           # --no-audit --no-fund = 跳过无关检查
+          # --legacy-peer-deps: pnpm 允许 peer conflicts（只 warn），npm v7+ strict ERESOLVE。
+          #                    claude-agent-sdk@0.3.178 要 zod@^4，desktop-agent 要 zod@^3——冲突。
+          #                    legacy-peer-deps = npm v6 行为，忽略 peer 冲突
           cd shell/src-tauri/server
-          npm install --omit=dev --no-audit --no-fund
+          npm install --omit=dev --no-audit --no-fund --legacy-peer-deps
 
           # 显式回根
           cd "$GITHUB_WORKSPACE"

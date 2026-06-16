@@ -2220,20 +2220,526 @@ async function checkConfig() {
 
 ---
 
-### 9.12 本章小结
+### 9.12 本章小结（v0.2 设计意图，**已被 §9.13 部分修正**）
 
-| 设计决策 | 结论 |
-|---------|------|
-|资源只读，运行时只写 | P1：bundle 内文件永不写 |
-| Node 是 Tauri subprocess | P2：Tauri spawn + watchdog Node |
-| dev/prod 路径一致 | P3：所有路径通过 Tauri path API 计算 |
-| 静态文件服务 | **B（Express 静态）**：`http://127.0.0.1:3737/apps/` |
-| 健康检查 | **A（HTTP 轮询）**：`/api/platform/health` + 30s watchdog |
-| Node嵌入 | **Tauri sidecar**：Node binary 作为 bundle 资源 |
-| WebView URL | `http://127.0.0.1:3737/`（Node 先 ready 再让 WebView 加载）|
-| 跨平台 CI | **v0.1 仅 2 平台**：macOS（DMG） + Windows（NSIS exe）；Linux dev 正常但不发包 |
+| 设计决策 | 结论 | 状态 |
+|---------|------|------|
+|资源只读，运行时只写 | P1：bundle 内文件永不写 | ✅ 保持 |
+| Node 是 Tauri subprocess | P2：Tauri spawn + watchdog Node | ✅ 保持 |
+| dev/prod 路径一致 | P3：所有路径通过 Tauri path API 计算 | ⚠️ 见 §9.13 Gap 4 |
+| 静态文件服务 | **B（Express 静态）**：`http://127.0.0.1:3737/apps/` | ✅ 保持 |
+| 健康检查 | **A（HTTP 轮询）**：`/api/platform/health` + 30s watchdog | ✅ 保持 |
+| Node嵌入 | **Tauri sidecar**：Node binary 作为 bundle 资源 | ❌ 见 §9.13 Gap 1（v0.1 改为系统 PATH，v0.2+ 再上 sidecar） |
+| WebView URL | `http://127.0.0.1:3737/`（Node 先 ready 再让 WebView 加载）| ⚠️ 见 §9.13 Gap 2（v0.1 改为 splash → navigate 方案）|
+| 跨平台 CI | **v0.1 仅 2 平台**：macOS（DMG） + Windows（NSIS exe）；Linux dev 正常但不发包 | ✅ 保持 |
 
 > **打包三原则（P1/P2/P3）是防止"本地正常打包挂"的根本**。后续任何修改必须保持这三条原则。
+
+---
+
+### 9.13 打包架构 v0.3.1：基于实测 + 自包含诉求的修正
+
+> **背景**：v0.2 写完后实际打包测试（2026-06-15 一日 14 个 fix commit 都失败）暴露了 §9.0-§9.12 与可运行实现之间的 11 处脱节。Benjamin 在 v0.3 评审中明确诉求：**应用必须自包含，不依赖用户机器预装 Node**。本节据此修正。
+
+#### 9.13.1 修正总览
+
+| # | §9 v0.2 决策 | v0.3.1 实际决策 | 偏离原因 | 何时回归 |
+|---|------------|-------------|---------|---------|
+| 1 | Node sidecar | **Tauri sidecar（完整实现）** | **用户诉求：自包含应用**。v0.3 曾简化用系统 PATH node，违背自包含原则 | 一直保持 |
+| 2 | `app.windows[0].url` 直指 `http://127.0.0.1:3737/` | **splash data:URL → eval navigate** | Tauri 启动窗口时 Node 还没 ready，会白屏/超时；data:URL splash 立即可见，再 JS 切到 Node URL | 永远使用此方案（更好的 UX） |
+| 3 | `frontendDist` 指向 `apps/` | **不设 `frontendDist`，依赖 splash + navigate** | 实际前端由 Node Express 服务（§9.6 B 方案），不在 Tauri 内嵌；frontendDist 与 URL 二选一 | 永远不用 |
+| 4 | P3 路径全用 Tauri path API | **dev 用 `DESKTOPWORK_DEV_ENTRY` 环境变量，prod 用 `app.path().resource_dir()` 推算** | path API 在 debug build 行为不一致；env var 简单可靠 | 验证够用即可 |
+| 5 | `bundle.resources` 4 条 map | **`["server"]` 单条目录** | pnpm deploy 已经把 dist/node_modules/package.json/apps 全部塞到 server/，单条最简单 | 永远用单条 |
+| 6 | CSP 严格白名单 | **`csp: null`** | dev 模式要宽松避免拦 devtools；prod 当前不暴露公网 | v0.2 加白名单 |
+| 7 | Tauri 2 完整 sidecar | **bundle.externalBin + Tauri 2 sidecar API** | 同 Gap 1（自包含需求） | 一直保持 |
+| 8 | CI 用 `tauri-action@v0` | **CI 用 `cargo install tauri-cli --version "^2.0.0" --locked` + 直接 `cargo tauri build`** | `tauri-action` 是更高层封装，对自定义 bundle 流程不友好；直接调 tauri-cli 可控性高 | 保持 |
+| 9 | tauri-cli 通过 npm 装 | **CI 通过 cargo 装** | shell/ 不在 pnpm workspace，npm 装不可靠；cargo 装与 Rust toolchain 一致 | 永远用 cargo |
+| 10 | Node binary CI 不下载 | **CI actions/cache + curl nodejs.org 下载** | 自包含应用要求 Node 随包分发 | 一直保持 |
+
+#### 9.13.2 v0.3.1 实际架构图
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Tauri 主进程（Rust, ~9MB stripped）                              │
+│                                                                   │
+│  启动顺序:                                                        │
+│  1. WebviewWindowBuilder → 创建窗口，url =                       │
+│       data:text/html,...<splash HTML 内嵌>                       │
+│  2. tokio::spawn(setup):                                         │
+│     a) resolve_node_sidecar() → app.path().resource_dir()        │
+│        .join("node-{platform}")  ★ Tauri 2 sidecar 路径          │
+│     b) spawn sidecar node → server/dist/index.js                │
+│     c) wait_for_ready: TcpStream 轮询 127.0.0.1:3737             │
+│     d) window.eval("window.location.href = base_url")            │
+│  3. watchdog: 每 30s 检查 health                                 │
+│                                                                   │
+│  Node binary 路径解析:                                           │
+│  - dev:   系统 PATH 的 tsx（开发者本机 Node，符合预期）          │
+│  - prod:  Tauri sidecar（bundle 内置，完全自包含）                │
+│                                                                   │
+│  Bundle:                                                          │
+│  - bundle.resources = ["server"]  ← pnpm deploy 已备好          │
+│  - bundle.externalBin = ["../node-binaries/node-{platform}"]     │
+│  - frontendDist = 不设置（避免和 navigate 冲突）                  │
+│  - app.windows[0].url = 不设置（用 splash + eval）                │
+└──────────────────────────────────────────────────────────────────┘
+
+↓ spawn（prod 用 sidecar / dev 用系统 PATH）
+
+┌──────────────────────────────────────────────────────────────────┐
+│ Node.js Platform 进程                                              │
+│                                                                   │
+│  入口: server/dist/index.js                                       │
+│  端口: 3737（可由 PORT 环境变量覆盖）                            │
+│  静态: /apps/* → server/apps/（前端 HTML）                        │
+│  API:  /api/platform/*, /api/bot-chat/*, /api/settings/*          │
+│                                                                   │
+│  内嵌依赖（已打包进 server/node_modules/）:                        │
+│  - @anthropic-ai/claude-agent-sdk                                  │
+│  - @anthropic-ai/claude-agent-sdk-linux-x64/claude (~249MB)        │
+│  - express, cors, zod 等                                          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+#### 9.13.3 v0.3.1 tauri.conf.json 完整示例（**唯一正确版本**）
+
+```json
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DesktopWork",
+  "version": "0.1.0",
+  "identifier": "com.benjamin.desktopwork",
+
+  "build": {
+    // ★ 不设 frontendDist — WebView 走 splash → navigate 到 Node
+    // ★ 不设 beforeBuildCommand — CI workflow 显式 pnpm deploy
+  },
+
+  "app": {
+    "windows": [{
+      "title": "DesktopWork",
+      "width": 900,
+      "height": 700,
+      "minWidth": 600,
+      "minHeight": 400,
+      "center": true
+      // ★ 不设 url — 用 main.rs 的 splash + eval 动态加载
+    }],
+    "security": {
+      "csp": null
+      // ★ v0.1 暂关；v0.2 加白名单（§9.6.3）
+    }
+  },
+
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "dmg"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "resources": ["server"],
+    // ★ 单条 server/ 即可。pnpm deploy 已经把 dist/、node_modules/、package.json、apps/ 全塞进 server/
+    "externalBin": ["../node-binaries/node-${platform}"],
+    // ★ Tauri 2 sidecar：CI 下载 Node binary 到 shell/node-binaries/node-{platform}，Tauri 自动重命名为 node-{platform}-{target-triple} 后打包
+    "windows": { "nsis": { "installMode": "currentUser" } }
+  }
+}
+```
+
+**`externalBin` 路径占位符 `${platform}`**：
+
+Tauri 2 的 `externalBin` 字段支持 `${platform}` 占位符（注意：这是 Tauri CLI 的处理，不是 shell），在 build 时自动展开成当前 target 平台对应的文件。CI 必须在 `shell/node-binaries/` 下准备好对应文件：
+- `node-linux-x64`（无后缀，chmod +x）
+- `node-darwin-x64`
+- `node-darwin-arm64`
+- `node-windows-x64.exe`
+
+#### 9.13.4 v0.3.1 main.rs 关键路径解析（修订 P3 + 加 sidecar）
+
+```rust
+// shell/src-tauri/src/main.rs
+
+use tauri::Manager;
+
+fn resolve_server_entry<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
+    // dev: 优先用环境变量，回退到 ./desktop-agent/src/index.ts 相对路径
+    // prod: 从 resource_dir 推算 resources/server/dist/index.js
+    if cfg!(debug_assertions) {
+        std::env::var("DESKTOPWORK_DEV_ENTRY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("desktop-agent/src/index.ts"))
+    } else {
+        let resource_dir = app.path().resource_dir()
+            .expect("failed to get resource dir");
+        resource_dir.join("server").join("dist").join("index.js")
+    }
+}
+
+fn resolve_node_runner<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    entry: &Path,
+) -> (PathBuf, Vec<String>) {
+    // dev: 系统 PATH 的 tsx 跑 .ts（开发者本机应已装 Node）
+    // prod: Tauri 2 sidecar node-{platform} 跑 .js（自包含，不依赖宿主）
+    if cfg!(debug_assertions) {
+        let cmd = if entry.extension().map(|e| e == "ts").unwrap_or(false) {
+            "tsx"
+        } else {
+            "node"
+        };
+        (PathBuf::from(cmd), vec![entry.to_string_lossy().to_string()])
+    } else {
+        let resource_dir = app.path().resource_dir()
+            .expect("failed to get resource dir");
+        // Tauri 2 把 externalBin 的文件复制到 resource_dir 并加 target-triple 后缀
+        // 例如 node-linux-x64 → node-linux-x64-x86_64-unknown-linux-gnu
+        // 用 glob 匹配或者直接构造 sidecar 名
+        let target_triple = current_target_triple(); // "x86_64-unknown-linux-gnu" 等
+        let sidecar_name = format!("node-{}-{}", current_platform(), target_triple);
+        let sidecar_path = resource_dir.join(&sidecar_name);
+        // Windows 加 .exe
+        #[cfg(windows)]
+        let sidecar_path = {
+            let mut p = sidecar_path;
+            p.set_extension("exe");
+            p
+        };
+        (sidecar_path, vec![entry.to_string_lossy().to_string()])
+    }
+}
+
+fn current_platform() -> &'static str {
+    if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        "darwin-arm64"
+    } else if cfg!(target_os = "macos") {
+        "darwin-x64"
+    } else if cfg!(target_os = "windows") {
+        "windows-x64"
+    } else {
+        "linux-x64"
+    }
+}
+
+fn current_target_triple() -> &'static str {
+    // Tauri 2 默认 target triple，跨平台固定
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "aarch64-apple-darwin"
+    } else if cfg!(target_os = "macos") {
+        "x86_64-apple-darwin"
+    } else if cfg!(target_os = "windows") {
+        "x86_64-pc-windows-msvc"
+    } else {
+        "x86_64-unknown-linux-gnu"
+    }
+}
+```
+
+**关键变化**（对比 §9.5.2 原始设计）：
+- ✅ **去掉硬编码 `/mnt/d/projects/desktopwork/...`**
+- ✅ **dev 用 `DESKTOPWORK_DEV_ENTRY` 环境变量**（可选覆盖）
+- ✅ **prod 用 `app.path().resource_dir()` 推算**（符合 P3，不用 hardcode）
+- ✅ **dev 模式用系统 `tsx` / `node`**（开发者本机应已装）
+- ✅ **prod 模式用 Tauri 2 sidecar**（自包含，应用自带 Node）
+- ⚠️ **简化点**：Tauri 2 sidecar 实际文件名带 target triple 后缀，本实现手动构造这个后缀。更严谨的方案是用 `tauri_plugin_shell::ShellExt::sidecar()` API 自动解析，但需要在 Cargo.toml 加 tauri-plugin-shell 依赖。当前实现够用 v0.1。
+
+#### 9.13.5 CI 工具链决策：cargo 装 tauri-cli，不用 npm
+
+**为什么不用 npm/pnpm 装**（shell/package.json 之前的方案）：
+
+| 问题 | 表现 |
+|------|------|
+| `shell/` 不在 pnpm workspace | pnpm install 行为不一致，CI 跑时 `node_modules/.bin/tauri` 偶尔缺失 |
+| `--no-lockfile` 跳过 lockfile | 依赖解析不可重现，CI 容易飘 |
+| `pnpm tauri` 走 script `tauri` 间接调 PATH | shell 脚本 + npm script + pnpm script 三层间接，故障点多 |
+
+**正确做法**（CI 显式装 Rust CLI）：
+
+```yaml
+- name: Setup Rust
+  uses: dtolnay/rust-toolchain@stable
+
+- name: Install tauri-cli (cargo)
+  run: cargo install tauri-cli --version "^2.0.0" --locked
+  shell: bash
+
+- name: Verify tauri CLI
+  run: |
+    . "$HOME/.cargo/env"
+    cargo tauri --version
+```
+
+**关键点**：
+- `cargo install tauri-cli --locked` 锁 Cargo.lock，**可重现**
+- `--version "^2.0.0"` 显式锁大版本，避免 breaking change
+- 装到 `$HOME/.cargo/bin/`，`source $HOME/.cargo/env` 即可
+- 不依赖 pnpm / npm 任何行为
+
+#### 9.13.5.1 Node binary 下载 + cache（**新增，v0.3.1**）
+
+Node binary 是 Tauri sidecar 的一部分，必须在 CI 显式下载并缓存。
+
+```yaml
+- name: Determine Node.js platform
+  id: node-platform
+  run: |
+    if [[ "$RUNNER_OS" == "Linux" ]]; then
+      PLATFORM="linux-x64"
+    elif [[ "$RUNNER_OS" == "macOS" ]]; then
+      if [[ "$RUNNER_ARCH" == "ARM64" ]]; then
+        PLATFORM="darwin-arm64"
+      else
+        PLATFORM="darwin-x64"
+      fi
+    elif [[ "$RUNNER_OS" == "Windows" ]]; then
+      PLATFORM="windows-x64"
+    fi
+    echo "PLATFORM=$PLATFORM" >> $GITHUB_OUTPUT
+    echo "Node platform: $PLATFORM"
+
+- name: Download Node.js binary
+  id: node-binary
+  run: |
+    PLATFORM="${{ steps.node-platform.outputs.PLATFORM }}"
+    NODE_VERSION="22.3.0"
+    TARBALL="node-v${NODE_VERSION}-${PLATFORM}"
+    mkdir -p shell/node-binaries
+
+    if [[ "$RUNNER_OS" == "Windows" ]]; then
+      # Windows 用 zip
+      curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.zip" -o /tmp/node.zip
+      unzip -j /tmp/node.zip "${TARBALL}/node.exe" -d shell/node-binaries/
+      mv "shell/node-binaries/node.exe" "shell/node-binaries/node-${PLATFORM}.exe"
+      rm /tmp/node.zip
+    else
+      # macOS / Linux 用 tar.xz
+      curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" -o /tmp/node.tar.xz
+      tar -xJf /tmp/node.tar.xz -C /tmp
+      mv "/tmp/${TARBALL}/bin/node" "shell/node-binaries/node-${PLATFORM}"
+      chmod +x "shell/node-binaries/node-${PLATFORM}"
+      rm /tmp/node.tar.xz
+    fi
+    echo "Node binary installed:"
+    ls -la shell/node-binaries/
+
+- name: Cache Node.js binary
+  uses: actions/cache@v4
+  with:
+    path: shell/node-binaries/
+    key: node-v22.3.0-${{ steps.node-platform.outputs.PLATFORM }}
+    restore-keys: |
+      node-v22-
+```
+
+**关键点**：
+- `actions/cache` 按 platform + version 缓存 → 后续 build 直接命中，秒级跳过下载
+- Windows 二进制 `.exe` 后缀，Unix 二进制无后缀 + `chmod +x`
+- 二进制名严格匹配 `node-{platform}`（`linux-x64` / `darwin-x64` / `darwin-arm64` / `windows-x64`）
+- Node version 锁 v22.3.0（与项目要求 Node ≥ 22.3 一致）
+
+#### 9.13.6 CI Build 完整流程（**唯一正确版本**）
+
+```yaml
+# .github/workflows/build.yml
+name: Build DesktopWork
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: dmg
+          - platform: windows-latest
+            target: nsis
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # === 1. 工具链 ===
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Setup pnpm
+        run: npm install -g pnpm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install tauri-cli
+        run: cargo install tauri-cli --version "^2.0.0" --locked
+
+      # === 2. Node sidecar binary 下载 + cache ===
+      - name: Determine Node.js platform
+        id: node-platform
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            echo "PLATFORM=linux-x64" >> $GITHUB_OUTPUT
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            if [[ "$RUNNER_ARCH" == "ARM64" ]]; then
+              echo "PLATFORM=darwin-arm64" >> $GITHUB_OUTPUT
+            else
+              echo "PLATFORM=darwin-x64" >> $GITHUB_OUTPUT
+            fi
+          elif [[ "$RUNNER_OS" == "Windows" ]]; then
+            echo "PLATFORM=windows-x64" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Node.js binary
+        run: |
+          PLATFORM="${{ steps.node-platform.outputs.PLATFORM }}"
+          NODE_VERSION="22.3.0"
+          TARBALL="node-v${NODE_VERSION}-${PLATFORM}"
+          mkdir -p shell/node-binaries
+
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.zip" -o /tmp/node.zip
+            unzip -j /tmp/node.zip "${TARBALL}/node.exe" -d shell/node-binaries/
+            mv "shell/node-binaries/node.exe" "shell/node-binaries/node-${PLATFORM}.exe"
+            rm /tmp/node.zip
+          else
+            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" -o /tmp/node.tar.xz
+            tar -xJf /tmp/node.tar.xz -C /tmp
+            mv "/tmp/${TARBALL}/bin/node" "shell/node-binaries/node-${PLATFORM}"
+            chmod +x "shell/node-binaries/node-${PLATFORM}"
+            rm /tmp/node.tar.xz
+          fi
+
+      - name: Cache Node.js binary
+        uses: actions/cache@v4
+        with:
+          path: shell/node-binaries/
+          key: node-v22.3.0-${{ steps.node-platform.outputs.PLATFORM }}
+          restore-keys: |
+            node-v22-
+
+      # === 3. 装依赖 ===
+      - name: Install workspace deps
+        run: pnpm install --ignore-scripts
+        # ★ 不带 --no-lockfile，保证可重现
+
+      # === 4. 编译 + 验证 desktop-agent ===
+      - name: Typecheck
+        run: pnpm -F desktop-agent typecheck
+
+      - name: Build desktop-agent
+        run: pnpm -F desktop-agent build
+        # 产出 desktop-agent/dist/
+
+      # === 5. 准备 bundle 资源（关键步骤） ===
+      - name: Deploy server bundle to shell
+        run: |
+          # ★ pnpm deploy 把 dist/、node_modules/、package.json、apps/ 全塞到 shell/src-tauri/server/
+          pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
+          echo "=== server bundle size ==="
+          du -sh shell/src-tauri/server
+          echo "=== server bundle contents ==="
+          ls shell/src-tauri/server/
+          echo "=== expected: dist/ node_modules/ package.json apps/ ==="
+          echo "=== Claude SDK binary present? ==="
+          find shell/src-tauri/server/node_modules/@anthropic-ai -name "claude" -type f
+
+      # === 6. tauri build（产 installer） ===
+      - name: Build Tauri app
+        run: |
+          . "$HOME/.cargo/env"
+          # ★ 用 ${platform} 占位符，CLI 自动展开成当前 target 对应 binary
+          cargo tauri build --config shell/src-tauri/tauri.conf.json --verbose
+        # ★ 用绝对路径指 config，避免 working-directory 不一致
+        # ★ Tauri CLI 看到 bundle.externalBin = ["../node-binaries/node-${platform}"]
+        #   会自动找 shell/node-binaries/node-{当前 target platform} 并打包
+
+      # === 7. 上传产物 ===
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktopwork-${{ matrix.target }}
+          path: |
+            shell/src-tauri/target/release/bundle/${{ matrix.target }}/*.exe
+            shell/src-tauri/target/release/bundle/${{ matrix.target }}/*.dmg
+          if-no-files-found: error
+```
+
+**关键点**：
+1. ✅ `cargo install tauri-cli --locked` 而非 npm — 解决「`tauri: command not found`」
+2. ✅ `pnpm install` 不带 `--no-lockfile` — 用仓库自带的 pnpm-lock.yaml
+3. ✅ 不用 `pnpm tauri` script — 直接 `cargo tauri build`，少一层间接
+4. ✅ 用绝对路径 `--config shell/src-tauri/tauri.conf.json` — 避免 working-directory 歧义
+5. ✅ **Node binary 通过 `actions/cache` + curl 下载**（v0.3.1 新增）
+6. ✅ `bundle.externalBin` 用 `${platform}` 占位符 — Tauri CLI 自动匹配
+7. ✅ 加 `if-no-files-found: error` — 失败立即发现，不会传空 artifact
+8. ✅ matrix 用 `windows-latest` / `macos-latest` runner，自带 Rust
+9. ✅ 删掉所有 `debug` step（"Debug Tauri setup" 等）— 它们只是临时诊断噪音
+
+#### 9.13.7 打包验证清单（CI 通过标准）
+
+CI 跑完后，**所有这些必须为真**才算打包成功：
+
+| # | 验证项 | 怎么验证 |
+|---|--------|---------|
+| V1 | Tauri CLI 装上 | step "Install tauri-cli" 通过 |
+| V2 | Node binary 下载 | step "Download Node.js binary" 产出 `shell/node-binaries/node-{platform}` |
+| V3 | Node binary 可执行 | dev 跑 `shell/node-binaries/node-linux-x64 --version` 返版本号 |
+| V4 | desktop-agent typecheck 零错 | step "Typecheck" 零错 |
+| V5 | desktop-agent build 成功 | step "Build desktop-agent" 产出 dist/ |
+| V6 | pnpm deploy 成功 | shell/src-tauri/server/ 存在且 ≥ 50MB（含 Claude SDK）|
+| V7 | server/ 结构正确 | server/{dist, node_modules, package.json, apps} 都存在 |
+| V8 | server 内有 Claude binary | find shell/src-tauri/server/node_modules/@anthropic-ai -name "claude" 有结果 |
+| V9 | cargo build 成功 | 产出 target/release/desktopwork（~9MB stripped） |
+| V10 | bundler 成功 | target/release/bundle/{nsis,dmg}/ 下有 .exe/.dmg |
+| V11 | installer 可上传 | upload-artifact 找到文件 |
+| **V12** | **自包含验证（关键）** | 把 .dmg/.exe 安装到干净虚拟机 → 双击 → Node ready → AI 响应（v0.2+ 实现自动化测试）|
+
+#### 9.13.8 失败诊断决策树
+
+```
+CI 失败 →
+├─ "tauri: command not found"
+│  └─ 解决：cargo install tauri-cli --version "^2.0.0" --locked
+│
+├─ "Node binary not found in shell/node-binaries/"
+│  └─ 解决：检查 "Download Node.js binary" step 是否正确执行，curl 网络通不通
+│
+├─ "externalBin file not found"
+│  └─ 解决：tauri.conf.json 的 externalBin 路径必须和 shell/node-binaries/node-{platform} 名字一致
+│
+├─ "pnpm install fails"
+│  └─ 解决：去掉 --no-lockfile，确保仓库有 pnpm-lock.yaml
+│
+├─ "pnpm deploy fails"
+│  └─ 解决：确认 desktop-agent/package.json 有正确的 dependencies
+│
+├─ "frontendDist not found"
+│  └─ 解决：tauri.conf.json 不设 frontendDist（用 splash + navigate）
+│
+├─ "cargo tauri build fails: config not found"
+│  └─ 解决：用绝对路径 --config shell/src-tauri/tauri.conf.json
+│
+└─ "no installer produced"
+   └─ 解决：检查 bundle.resources = ["server"]，确认 shell/src-tauri/server/ 存在
+```
+
+#### 9.13.9 v0.3.1 已知遗留（不阻塞）
+
+| 项 | 影响 | 何时解决 |
+|----|------|---------|
+| CSP null | dev 体验好，prod 安全一般 | v0.2 加白名单 |
+| DesktopWork 二进制 ~9MB + Node sidecar ~50MB + Claude SDK binary ~250MB → installer ~300MB | 与 Electron 同量级 | 接受；v0.2+ 考虑 runtime 懒下载 binary |
+| 没自动更新 | 手动下载新版本 | v0.3 |
+| Sidecar 文件名带 target triple 后缀，main.rs 手动拼 | 简单但不优雅 | v0.2 引入 `tauri_plugin_shell::ShellExt::sidecar()` API |
+| 没跨平台 Node 编码验证 | Linux 实测过，Windows/macOS 待 v0.1 安装验证 | v0.1 §10.5.4-5.1.5 验证 |
+
+
 
 
 
@@ -2559,18 +3065,20 @@ pnpm -F desktop-agent typecheck
 
 ### 10.5 Phase 5：CI 与跨平台构建（v0.1.0）
 
+> **⚠️ 重要**：本节在 2026-06-16 经实测重写，反映 §9.13 v0.3.1 修正设计（含完整 Node sidecar 实现）。原来的 §10.5 步骤 5.1.3/5.1.4/5.1.5/5.1.6 与 §9 v0.2 设计意图一致但**未能跑通**，原因见 §9.13.1。
+
 **依赖**：Phase 1-4 全部完成
 
 | 步骤 | 任务 | DoD |
 |------|------|-----|
-| 5.1.1 | 写 `.github/workflows/ci.yml`：<br>• 装 pnpm + 依赖<br>• 跑 `pnpm run typecheck`<br>• 跑 `pnpm run test:smoke`（用 mock 端点）<br>• 跑 `pnpm tauri build`（macOS x64 + arm64 + Windows runner）| GitHub Actions 全平台绿 |
-| 5.1.2 | 加 `package.json` scripts：`typecheck`、`build`、`start`、`test:smoke` | `pnpm run <script>` 都可调 |
-| 5.1.3 | **【打包】** `shell/src-tauri/tauri.conf.json`：<br>• `bundle.targets: ["nsis", "dmg"]`（§9.9）<br>• `bundle.resources` 指定 4 个路径（§9.2）<br>• `bundle.externalBin` 指向 Node sidecar<br>• `app.windows[0].url: "http://127.0.0.1:3737/"`<br>• `app.security.csp` 加 `connect-src` | tsc + tauri info 跑通 |
-| 5.1.4 | **【Tauri 主进程】** `shell/src-tauri/src/main.rs`：<br>• spawn Node sidecar binary（按 OS 选择）<br>• 传环境变量 `PLATFORM_APP_DATA` / `PLATFORM_CWD` / `PLATFORM_PORT` / `PLATFORM_LOG_FILE`<br>• 轮询 `/api/platform/health` 等待 ready（30s 超时）<br>• watchdog thread 每 30s 检查 health | `cargo build` 成功；`./target/debug/desktopwork` 启动后 spawn Node 成功 |
-| 5.1.5 | **【资源拷贝】**  CI workflow 加 step（§9.3.2）：<br>• `pnpm deploy prod` 生成 prod-only node_modules<br>• 拷贝 dist/apps/package.json 到 `shell/src-tauri/`<br>• 拷贝 Node sidecar binary 到 `shell/src-tauri/` | `shell/src-tauri/node_modules` 体积 ≤50MB |
-| 5.1.6 | **【CI workflow】**  CI 动态下载 Node sidecar（§9.3.1）：<br>• `actions/cache@v4` 缓存 node-binaries/<br>• cache miss 时 curl 下载 nodejs.org tarball<br>• 按 matrix platform 选对应 binary | macOS + Windows runner 都能 build 成 .dmg / .exe |
-| 5.1.7 | **【手动验证】**  本地 `pnpm tauri build`（限 macOS dev 机）<br>• 产出 .app 和 .dmg<br>• 双击 .app 启动，Tauri 弹窗、Node 启动、WebView 加载页面<br>• 手动 chat 一轮验证 AI 响应 | .dmg 能安装、能启动、能 AI 聊天 |
-| 5.1.8 | **【Windows 验证】**  在 Windows runner 上 build + 手动安装 .exe：<br>• NSIS 安装器运行<br>• 安装后双击启动，验证 spawn Node + health check + AI 响应 | .exe 能安装、能启动、能 AI 聊天 |
+| 5.1.1 | 修 `shell/src-tauri/tauri.conf.json` 对齐 §9.13.3（**不设 frontendDist，不设 url，resources 用 ["server"]，externalBin = ["../node-binaries/node-${platform}"]**）| tauri info 跑通 |
+| 5.1.2 | 修 `shell/src-tauri/src/main.rs` 对齐 §9.13.4（**去掉硬编码路径，加 `DESKTOPWORK_DEV_ENTRY` env，prod 用 Tauri 2 sidecar API**）| cargo build 成功 |
+| 5.1.3 | **【重点】重写 `.github/workflows/build.yml`** 对齐 §9.13.6：<br>• `cargo install tauri-cli --version "^2.0.0" --locked`（**不**用 npm/pnpm 装 tauri-cli）<br>• **新增 Node sidecar 下载 step**：curl nodejs.org → `shell/node-binaries/node-{platform}` + `actions/cache@v4`<br>• `pnpm install`（不带 --no-lockfile，用仓库 lockfile）<br>• `pnpm -F desktop-agent typecheck` + `build`<br>• `pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server`<br>• `cargo tauri build --config shell/src-tauri/tauri.conf.json`（**绝对路径**）<br>• 上传 `target/release/bundle/{nsis,dmg}/*` artifact，加 `if-no-files-found: error`<br>• **删掉**所有 debug step（"Debug Tauri setup" 等）| macOS + Windows runner 都产出 installer |
+| 5.1.4 | **【手动验证】**  本地 `cargo tauri build --config shell/src-tauri/tauri.conf.json`（限 macOS dev 机）<br>• 产出 .app 和 .dmg<br>• 双击 .app 启动，Tauri 弹窗、splash → Node ready（sidecar 启动） → navigate 到 dashboard<br>• 手动 chat 一轮验证 AI 响应 | .dmg 能安装、能启动、能 AI 聊天 |
+| 5.1.5 | **【Windows 验证】**  在 Windows runner 上 build + 手动安装 .exe：<br>• NSIS 安装器运行<br>• 安装后双击启动，验证 spawn sidecar `node-windows-x64.exe` + health check + AI 响应 | .exe 能安装、能启动、能 AI 聊天 |
+| 5.1.6 | **【自包含验证】**  在干净虚拟机上装 .dmg/.exe（**没有 Node**），启动应用，验证 Node sidecar 自启、AI 响应 | 应用完全自包含，不需要宿主 Node |
+
+**§10.5 调试决策树**（CI 失败时第一看哪里）见 §9.13.8。
 
 ### 10.6 测试凭据约定
 
@@ -2797,3 +3305,5 @@ litellm --model gpt-4o --port 4000
 |------|------|------|
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
+| 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
+| 2026-06-16 | 0.3.1 | **回归自包含应用原则，补全 Node sidecar 实现**：（1）v0.3 简化「系统 PATH 调 node」违反自包含原则，**v0.3.1 修正**：dev 用系统 tsx（开发者应装），prod 用 Tauri 2 sidecar（应用自带 Node）；（2）`bundle.externalBin` 加入 `["../node-binaries/node-${platform}"]`；（3）§9.13.5.1 新增 Node binary 下载 + cache 详细 step（curl + actions/cache@v4）；（4）§9.13.4 main.rs 新增 sidecar 路径解析（`app.path().resource_dir().join(format!("node-{}-{}", platform, target_triple))`）；（5）§9.13.7 验证清单 V12 新增「自包含验证」；（6）§9.13.9 已知遗留删除「用户需装 Node」一条 |

@@ -133,10 +133,14 @@ jobs:
           cp -r desktop-agent/dist shell/src-tauri/server/dist
           cp desktop-agent/package.json shell/src-tauri/server/package.json
 
+          # ★ v0.3.1.9: 必须用 node-linker=hoisted，--shamefully-hoist flag 在某些场景不生效
+          # 验证：file node_modules/express → 必须显示 'directory'，不是 'symbolic link'
+          echo "node-linker=hoisted" > shell/src-tauri/server/.npmrc
+
           cd shell/src-tauri/server
-          # --shamefully-hoist 强制所有 deps 提升到 node_modules/ 顶层（npm-style，零 symlink）
+          # node-linker=hoisted: 强制所有 deps 提升到 node_modules/ 顶层（npm-style，零 symlink）
           # 跨平台一致：macOS DMG / Linux deb-rpm / Windows NSIS 行为相同
-          pnpm install --prod --shamefully-hoist
+          pnpm install --prod
 
           cd ../..
           echo "=== server bundle size ==="

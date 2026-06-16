@@ -3243,20 +3243,29 @@ Error [ERR_MODULE_NOT_FOUND]: Cannot find package 'express' imported from ...\se
 pnpm deploy --filter desktop-agent --prod --legacy shell/src-tauri/server
 ```
 
-**修正后**（v0.3.1.8）：
+**修正后**（v0.3.1.9，v0.3.1.8 修订）：
 ```bash
 # ❶ cp dist + package.json
 mkdir -p shell/src-tauri/server
 cp -r desktop-agent/dist shell/src-tauri/server/dist
 cp desktop-agent/package.json shell/src-tauri/server/package.json
 
-# ❷ 物理化安装（不用 symlink）
+# ❷ 物理化安装（不用 symlink）—— 必须用 .npmrc + node-linker=hoisted
+echo "node-linker=hoisted" > shell/src-tauri/server/.npmrc
 cd shell/src-tauri/server
-pnpm install --prod --shamefully-hoist
-# 重要：--shamefully-hoist 强制把所有 deps 提升到 node_modules/ 顶层（npm-style）
-# 不用 pnpm 默认的 .pnpm/ + symlink 布局
+pnpm install --prod
+# 重要：--shamefully-hoist flag 验证下不生效，必须用 node-linker=hoisted
+# 原因：pnpm 10 中 --shamefully-hoist 在有些场景下被 workspace context 覆盖
+# node-linker=hoisted 是 pnpm 官方推荐"模拟 npm"模式
 # 结果：node_modules/express/ 是真实目录（含 package.json、lib/、index.js）
 ```
+
+**v0.3.1.8 → v0.3.1.9 修订原因**：
+- v0.3.1.8 用了 `pnpm install --prod --shamefully-hoist`
+- WSL 验证：`file node_modules/express` → **仍是 symlink**，`.pnpm/` 仍存在
+- v0.3.1.9 改为 `.npmrc` + `node-linker=hoisted`：`file node_modules/express` → **directory** ✅
+- `--shamefully-hoist` 是 CLI flag，在某些 pnpm 10 + workspace context 下被覆盖
+- `node-linker=hoisted` 是 .npmrc 配置项，优先级最高，pnpm 官方推荐"模拟 npm"模式
 
 **预期产物**（`server/node_modules/express/`）：
 ```
@@ -3268,10 +3277,11 @@ package.json   ← Node 解析入口
 ```
 
 **验证**（WSL 已验证）：
-- `pnpm install --prod --shamefully-hoist` 装 4 个 prod deps（express、cors、zod、@anthropic-ai/sdk）到独立位置
-- `node_modules/express/package.json` 是真实文件 ✅
+- `pnpm install --prod` + `node-linker=hoisted` 装 4 个 prod deps（express、cors、zod、@anthropic-ai/sdk）到独立位置
+- `file node_modules/express` → **directory**（不是 symlink）✅
 - `node dist/index.js` 启动成功，HTTP 200 ✅
 - `curl /api/platform/health` 返回 `{"status":"ok"}` ✅
+- v0.3.1.8 验证不充分：用了 `--shamefully-hoist` flag 但产物仍含 symlink，**v0.3.1.9 修正为 .npmrc + node-linker=hoisted**
 
 **学习（避免下次再踩）**：
 
@@ -3280,7 +3290,8 @@ package.json   ← Node 解析入口
 3. ✅ **npm-style flat `node_modules` 是 symlink-free**——`--shamefully-hoist` 或显式 `pnpm install` 到独立位置生成的是真文件
 4. ✅ **installer 文件系统差异大**——macOS DMG（cp -a 保 symlink）vs Windows NSIS（symlink 丢失）vs Linux deb/rpm（cp -a 保 symlink）行为不同
 5. ✅ **为跨平台打包，优先选 `pnpm install --shamefully-hoist`**——所有 installer 平台都一致
-6. ✅ **如果 symlink 布局是必须的，用 `node --preserve-symlinks`**——但这增加复杂度、且不解决 symlink 丢失问题
+6. ✅ **`pnpm install --shamefully-hoist` flag 不一定生效**——v0.3.1.8 踩坑，改为 `.npmrc` + `node-linker=hoisted` 才真正有效
+7. ✅ **`file <path>` 是判断 symlink vs 真实目录的最简方法**——`ls` 跟随 symlink 看不到真相
 
 **调试手册**（Windows installer 缺依赖第一看哪里）：
 
@@ -3868,3 +3879,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
 | 2026-06-16 | 0.3.1.7 | **Windows installer 运行时问题（UNC path 修正）**：（1）§9.13.16 新增，记录 Windows .exe 装上后运行 1s 挂掉、log 只 5 行的诊断；（2）问题 H：`app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed canonicalized path，`Command::new()` 历史上不友好接受这个前缀，导致 spawn 隐式失败；（3）3 个叠加坑：UNC prefix + GUI app stderr 不可见 + tracing_appender::non_blocking 缓冲 panic 时丢 log；（4）修正：main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀 + `eprintln!` 兑底可见性 + 关键路径同步 flush；（5）§9.13.1 修正总览表新增 Gap 18（UNC path）；（6）调试手册：Windows 运行时问题第一看 log file → 试 node.exe --version → 试 node server\dist\index.js → 检查 UNC prefix |
 | 2026-06-16 | 0.3.1.8 | **NSIS symlink 丢失修正**：（1）§9.13.17 新增，记录 Windows installer 装上后 `Cannot find package 'express'` 的诊断；（2）问题 I：`pnpm deploy` 生成 pnpm 内部 symlink 布局（`node_modules/express -> .pnpm/express@4.22.2/...`），NSIS installer 提取时**不保留 symlinks**（Windows API 不走 SeCreateSymbolicLinkPrivilege）→ Node 解析 `import 'express'` 找不到入口；（3）用户截图确认：`server/node_modules/.pnpm/` 下所有包都在，但 `server/node_modules/express` symlink 缺失（只剩 .bin .pnpm .modules.yaml）；（4）修正：CI deploy step 改用 `cp dist + cp package.json + pnpm install --prod --shamefully-hoist`（npm-style flat 物理文件，零 symlink）；（5）§9.13.1 修正总览表新增 Gap 19（NSIS symlink 丢失）；（6）WSL 端到端验证：物理文件生成 ✅，node 启动 ✅，curl /api/platform/health 200 ✅；（7）学习：跨平台 installer macOS DMG / Linux deb/rpm 用 `cp -a` 保 symlink，Windows NSIS 不保；为跨平台打包优先 `--shamefully-hoist` |
+| 2026-06-16 | 0.3.1.9 | **v0.3.1.8 验证不充分修正**：（1）`pnpm install --shamefully-hoist` flag 在 pnpm 10 + workspace context 下被覆盖，产物仍含 symlink → v0.3.1.8 修复无效；（2）改用 `.npmrc` + `node-linker=hoisted`（pnpm 官方推荐"模拟 npm"模式），`file node_modules/express` → `directory` ✅；（3）修 build.yml：加 `echo 'node-linker=hoisted' > .npmrc` 在 `pnpm install` 之前；（4）WSL 端到端重验证：物理目录 ✅、server 启动 ✅、curl /api/platform/health 200 ✅；（5）§9.13.17 补充"v0.3.1.8 → v0.3.1.9 修订原因"段；（6）学习 6/7：--shamefully-hoist flag 不一定生效、node-linker=hoisted 是 .npmrc 配置项、file 才是判断 symlink 真相的方法 |

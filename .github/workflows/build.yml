@@ -18,6 +18,10 @@ jobs:
         include:
           - platform: macos-latest
             target: dmg
+            node-tarball-platform: darwin-arm64
+            node-binary-suffix: -aarch64-apple-darwin
+          - platform: macos-13
+            target: dmg
             node-tarball-platform: darwin-x64
             node-binary-suffix: -x86_64-apple-darwin
           - platform: windows-latest

@@ -22,7 +22,7 @@ jobs:
             node-binary-suffix: -x86_64-apple-darwin
           - platform: windows-latest
             target: nsis
-            node-tarball-platform: windows-x64
+            node-tarball-platform: win-x64
             node-binary-suffix: -x86_64-pc-windows-msvc.exe
     runs-on: ${{ matrix.platform }}
     steps:

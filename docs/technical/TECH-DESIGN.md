@@ -2268,6 +2268,9 @@ async function checkConfig() {
 | 21 | （业务决定） | **matrix 去掉 macos-13 (x64) entry** | macos-13 Intel runner 启动有问题；Apple 已全面转向 ARM64，Intel Mac 用户极少。v0.1 聚焦 ARM64 + Windows 跑通，未来按需加回 | v0.2+ 考虑加回 |
 | 22 | （未预料） | **CI deploy 改用 `npm install` 代替 `pnpm install`** | pnpm v11 + `node-linker=hoisted` + 独立位置 + subshell + `set -e` 组合下 silent fail（`68K + 无 node_modules`）。npm 默认就是 hoisted 布局，无须 flag，跨 npm/pnpm 版本一致 | 一直保持 |
 | 23 | （未预料） | **`npm install` 加 `--legacy-peer-deps`** | pnpm 默认 auto-install-peers + warn 跳过 peer conflicts；npm v7+ strict ERESOLVE 拒绝。`@anthropic-ai/claude-agent-sdk@0.3.178` 要 zod@^4，`desktop-agent` 要 zod@^3——冲突。`--legacy-peer-deps` = npm v6 行为，忽略 peer 冲突 | 一直保持 |
+| 24 | （未预料） | **tauri.conf.json 去掉 `app.windows[0]`** | Tauri 2 在 setup 之前 auto-create `app.windows[i].create=true` 的 window；setup() 又 `WebviewWindowBuilder::new("main").build()` → `Error::WindowLabelAlreadyExists` → setup Err → app 退出 | 一直保持 |
+| 25 | （未预料） | **main.rs 改 node runner 路径为 `node` / `node.exe`（去掉 triple）** | Tauri 2 bundler 源码 `dest_filename.replace(&format!("-{}", target), "")` 把 -triple 后缀去掉，installer 安装后是 `node.exe`（不是 `node-x86_64-pc-windows-msvc.exe`）；CI 仍要命名带 triple 的 source file（Tauri 验证时用） | 一直保持 |
+| 26 | （未预料） | **CI deploy step 加 `cp -r desktop-agent/apps shell/src-tauri/server/apps`** | `pnpm deploy` 自动包含 monorepo 包的所有目录；改用 `cp` 后必须显式 cp 每个目录；`apps/` 含 frontend HTML/JS（dashboard/chat/settings），是 webview 加载的静态文件源 | 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3303,6 +3306,9 @@ package.json   ← Node 解析入口
 12. ✅ **pnpm 和 npm peer dep 行为差异**——pnpm auto-install-peers + warn 跳过，npm v7+ strict ERESOLVE；切换工具链时加 `--legacy-peer-deps` 兼容
 13. ✅ **transitive peer dep 版本冲突**——`@anthropic-ai/claude-agent-sdk@0.3.178` 要 zod@^4，但顶层要 zod@^3；用 `--legacy-peer-deps` 临时绕开，长期需 SDK 升版或 zod 升级
 14. ✅ **`Option::unwrap_or_else` vs `Result::unwrap_or_else` 参数数量不同**（0 vs 1），subagent 不编译直接 commit → v0.3.1.7/14 踩坑；写完代码必须 cargo check 验证
+15. ✅ **Tauri 2 `app.windows[i].create=true` 在 setup 之前 auto-create**——setup 又建同 label window 触发 `WindowLabelAlreadyExists` → v0.3.1.15 踩坑
+16. ✅ **Tauri 2 bundler 在 installer 写入时 strip -triple suffix**（源码 `dest_filename.replace(...)`）——main.rs 不能再用 triple 拼路径，CI 仍要 triple 命名 source file
+17. ✅ **`pnpm deploy` 隐式包含包所有目录 → 改 `cp` 必须显式 cp 每个目录**（apps/、scripts/ 等）——v0.3.1.15 chat 错误踩坑（漏 cp apps/）
 
 **调试手册**（Windows installer 缺依赖第一看哪里）：
 

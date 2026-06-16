@@ -134,6 +134,10 @@ jobs:
           rm -rf shell/src-tauri/server
           mkdir -p shell/src-tauri/server
           cp -r desktop-agent/dist shell/src-tauri/server/dist
+          # ★ v0.3.1.15: 必须 cp apps/ 目录——含 frontend HTML/JS（dashboard/chat/settings）
+          # router.ts 用 express.static(APPS_DIR) 提供 /apps/*，APPS_DIR = __dirname/../apps
+          # prod install 后 C:\...\server\apps\ 必须存在，否则 /apps/chat/index.html 404
+          cp -r desktop-agent/apps shell/src-tauri/server/apps
           cp desktop-agent/package.json shell/src-tauri/server/package.json
 
           # ★ 改用 npm install（默认就是 hoisted 布局，无须 flag，跨平台一致）

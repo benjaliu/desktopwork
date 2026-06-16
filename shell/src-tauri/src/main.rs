@@ -94,17 +94,18 @@ fn resolve_node_runner<R: tauri::Runtime>(
             .expect("failed to get resource dir");
         // ★ v0.3.1.7: strip UNC prefix (\\?\)
         let resource_dir = strip_unc_prefix(&resource_dir);
-        // Tauri 2 renames externalBin entries by appending the cargo target triple:
-        //   node (externalBin base name)
-        //     → node-x86_64-unknown-linux-gnu        (Linux)
-        //     → node-x86_64-apple-darwin             (macOS Intel)
-        //     → node-aarch64-apple-darwin            (macOS Apple Silicon)
-        //     → node-x86_64-pc-windows-msvc.exe      (Windows)
-        // The base name `node` lives in shell/node-binaries/ as a target-triple suffixed file
-        // produced by the GitHub Actions workflow (`§9.13.5.1`-style download step).
+        // Tauri 2 bundler workflow:
+        //   1. externalBin = ["../node-binaries/node"] + target triple
+        //   2. Bundler expects source file at: node-{target-triple}.exe (or no ext on Unix)
+        //   3. Bundler COPIES it to installer with the -triple suffix STRIPPED:
+        //      dest_filename = src.file_name().replace(&format!("-{}", target), "")
+        //   4. Result: installer installs as `node.exe` (Windows) or `node` (Unix)
+        //      — NOT `node-x86_64-pc-windows-msvc.exe`!
+        // See: tauri-bundler-2.9.2/src/bundle/windows/nsis/mod.rs (and other platforms)
+        // CI must still NAME the source file with -triple suffix (Tauri expects it).
         let sidecar_path = {
             #[allow(unused_mut)] // mut is needed on Windows for set_extension
-            let mut p = resource_dir.join(format!("node-{}", current_target_triple()));
+            let mut p = resource_dir.join("node");
             #[cfg(windows)]
             {
                 p.set_extension("exe");

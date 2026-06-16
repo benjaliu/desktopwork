@@ -5,16 +5,6 @@
   "identifier": "com.benjamin.desktopwork",
   "build": {},
   "app": {
-    "windows": [
-      {
-        "title": "DesktopWork",
-        "width": 900,
-        "height": 700,
-        "minWidth": 600,
-        "minHeight": 400,
-        "center": true
-      }
-    ],
     "security": {
       "csp": null
     }

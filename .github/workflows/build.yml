@@ -36,12 +36,14 @@ jobs:
 
       - name: Setup pnpm
         run: npm install -g pnpm
+        shell: bash
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install tauri-cli
         run: cargo install tauri-cli --version "^2.0.0" --locked
+        shell: bash
 
       # === 2. Node sidecar binary 下载 + cache ===
       # Tauri 2 在 bundle 时把 externalBin 里的 `node` 重命名为
@@ -76,6 +78,7 @@ jobs:
           echo "=== Node binary installed ==="
           ls -la shell/node-binaries/
           "$FINAL_NAME" --version || true
+        shell: bash
 
       - name: Cache Node.js binary
         uses: actions/cache@v4
@@ -88,14 +91,17 @@ jobs:
       # === 3. 装依赖 ===
       - name: Install workspace deps
         run: pnpm install --ignore-scripts
+        shell: bash
         # ★ 不带 --no-lockfile，保证可重现
 
       # === 4. 编译 + 验证 desktop-agent ===
       - name: Typecheck
         run: pnpm -F desktop-agent typecheck
+        shell: bash
 
       - name: Build desktop-agent
         run: pnpm -F desktop-agent build
+        shell: bash
         # 产出 desktop-agent/dist/
 
       # === 5. 准备 bundle 资源（关键步骤） ===
@@ -110,6 +116,7 @@ jobs:
           echo "=== expected: dist/ node_modules/ package.json apps/ ==="
           echo "=== Claude SDK binary present? ==="
           find shell/src-tauri/server/node_modules/@anthropic-ai -name "claude" -type f
+        shell: bash
 
       # === 6. tauri build（产 installer） ===
       - name: Build Tauri app
@@ -117,6 +124,7 @@ jobs:
           . "$HOME/.cargo/env"
           # ★ 用绝对路径指 config，避免 working-directory 不一致
           cargo tauri build --config shell/src-tauri/tauri.conf.json --verbose
+        shell: bash
         # ★ Tauri CLI 看到 bundle.externalBin = ["../node-binaries/node"]
         #   会自动找 shell/node-binaries/node-{当前 target triple}{.exe}
         #   并在 bundle 时重命名为 node-{target-triple} 复制到 resource_dir

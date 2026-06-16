@@ -46,11 +46,24 @@ jobs:
         shell: bash
 
       # === 2. Node sidecar binary 下载 + cache ===
-      # Tauri 2 在 bundle 时把 externalBin 里的 `node` 重命名为
-      # `node-{target-triple}{.exe}`（windows 加 .exe）。CI 必须把下载下来的
-      # Node 二进制保存成 tauri-build 在 build.rs 期能找到的文件名。
+      # Tauri 2 在 bundle 时把 externalBin 里的字面 basename 追加 -<target-triple> 后缀。
+      # CI 下载的 Node 二进制必须以同样规则命名，否则 build 报 ExternalBinNotFound。
+      #
+      # 顺序很关键：先 cache，再 download（只在 cache miss 时），
+      # 否则 cache hit 时会用旧文件覆盖刚下载的新文件。
+      - name: Cache Node.js binary
+        id: cache-node
+        uses: actions/cache@v4
+        with:
+          path: shell/node-binaries/
+          key: node-v22.3.0-${{ matrix.target }}
+          restore-keys: |
+            node-v22-
+
       - name: Download Node.js binary
+        if: steps.cache-node.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           NODE_VERSION="22.3.0"
           NODE_PLATFORM="${{ matrix.node-tarball-platform }}"
           BINARY_SUFFIX="${{ matrix.node-binary-suffix }}"
@@ -59,34 +72,33 @@ jobs:
           FINAL_NAME="shell/node-binaries/node${BINARY_SUFFIX}"
 
           if [[ "$RUNNER_OS" == "Windows" ]]; then
-            # Windows 用 zip —— node.exe 是顶层目录里的唯一二进制
-            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.zip" -o /tmp/node.zip
+            # Windows 用 zip
+            curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.zip" -o /tmp/node.zip
             unzip -j /tmp/node.zip "${TARBALL}/node.exe" -d shell/node-binaries/
-            # 重命名为 tauri-build 期望的 target-triple 名字
             mv "shell/node-binaries/node.exe" "$FINAL_NAME"
             rm /tmp/node.zip
           else
             # macOS / Linux 用 tar.xz
-            curl -L "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" -o /tmp/node.tar.xz
+            curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${TARBALL}.tar.xz" -o /tmp/node.tar.xz
             tar -xJf /tmp/node.tar.xz -C /tmp
-            # 重命名为 tauri-build 期望的 target-triple 名字
             mv "/tmp/${TARBALL}/bin/node" "$FINAL_NAME"
             chmod +x "$FINAL_NAME"
             rm /tmp/node.tar.xz
+          fi
+
+          # ★ size 校验：真 Node binary ≥ 50MB，404 HTML 才 14 字节
+          SIZE=$(stat -c%s "$FINAL_NAME")
+          if [[ "$SIZE" -lt 1000000 ]]; then
+            echo "::error::Downloaded Node binary is $SIZE bytes (< 1MB), probably 404 or empty"
+            file "$FINAL_NAME" 2>/dev/null || true
+            head -c 200 "$FINAL_NAME" 2>/dev/null || true
+            exit 1
           fi
 
           echo "=== Node binary installed ==="
           ls -la shell/node-binaries/
           "$FINAL_NAME" --version || true
         shell: bash
-
-      - name: Cache Node.js binary
-        uses: actions/cache@v4
-        with:
-          path: shell/node-binaries/
-          key: node-v22.3.0-${{ matrix.target }}
-          restore-keys: |
-            node-v22-
 
       # === 3. 装依赖 ===
       - name: Install workspace deps
@@ -119,6 +131,16 @@ jobs:
         shell: bash
 
       # === 6. tauri build（产 installer） ===
+      - name: Debug before tauri build
+        run: |
+          echo "=== pwd ==="
+          pwd
+          echo "=== shell/node-binaries/ ==="
+          ls -la shell/node-binaries/ || echo "no node-binaries dir"
+          echo "=== file types ==="
+          file shell/node-binaries/* 2>/dev/null || echo "no files"
+        shell: bash
+
       - name: Build Tauri app
         run: |
           . "$HOME/.cargo/env"

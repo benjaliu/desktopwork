@@ -143,7 +143,7 @@ jobs:
 
       - name: Build Tauri app
         run: |
-          . "$HOME/.cargo/env"
+          # dtolnay/rust-toolchain@stable 已把 cargo 加到 PATH，不需 source env
           # ★ 用绝对路径指 config，避免 working-directory 不一致
           cargo tauri build --config shell/src-tauri/tauri.conf.json --verbose
         shell: bash

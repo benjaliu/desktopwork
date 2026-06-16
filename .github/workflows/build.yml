@@ -122,27 +122,31 @@ jobs:
         # 产出 desktop-agent/dist/
 
       # === 5. 准备 bundle 资源（关键步骤） ===
-      - name: Deploy server bundle to shell (v0.3.1.8 shamefully-hoist)
+      - name: Deploy server bundle to shell (v0.3.1.10)
         run: |
-          # ★ v0.3.1.8: 不用 pnpm deploy（生成 symlink，NSIS 提取时丢失）
-          # 改用 cp dist + pnpm install --shamefully-hoist 物理化所有 deps
+          # ★ v0.3.1.8/9/10: 不用 pnpm deploy（生成 symlink，NSIS 提取时丢失）
+          # 改用 cp dist + .npmrc + pnpm install --prod 物理化所有 deps
+          # v0.3.1.9: --shamefully-hoist flag 不够，必须用 .npmrc node-linker=hoisted
+          # v0.3.1.10: 修 cd ../.. 错误路径 bug（v0.3.1.9 在 pnpm v11 下表现不同导致 cwd 错误）
           # 理由：见 docs/technical/TECH-DESIGN.md §9.13.17
 
-          rm -rf shell/src-tauri/server
-          mkdir -p shell/src-tauri/server
-          cp -r desktop-agent/dist shell/src-tauri/server/dist
-          cp desktop-agent/package.json shell/src-tauri/server/package.json
+          # 用 subshell 隔离 cwd，结束后自动回到 repo root（避免 cd 路径错误）
+          (
+            set -euo pipefail
+            rm -rf shell/src-tauri/server
+            mkdir -p shell/src-tauri/server
+            cp -r desktop-agent/dist shell/src-tauri/server/dist
+            cp desktop-agent/package.json shell/src-tauri/server/package.json
 
-          # ★ v0.3.1.9: 必须用 node-linker=hoisted，--shamefully-hoist flag 在某些场景不生效
-          # 验证：file node_modules/express → 必须显示 'directory'，不是 'symbolic link'
-          echo "node-linker=hoisted" > shell/src-tauri/server/.npmrc
+            # ★ node-linker=hoisted: 强制所有 deps 提升到 node_modules/ 顶层（npm-style，零 symlink）
+            # 跨平台一致：macOS DMG / Linux deb-rpm / Windows NSIS 行为相同
+            echo "node-linker=hoisted" > shell/src-tauri/server/.npmrc
 
-          cd shell/src-tauri/server
-          # node-linker=hoisted: 强制所有 deps 提升到 node_modules/ 顶层（npm-style，零 symlink）
-          # 跨平台一致：macOS DMG / Linux deb-rpm / Windows NSIS 行为相同
-          pnpm install --prod
+            cd shell/src-tauri/server
+            pnpm install --prod
+          )
 
-          cd ../..
+          # subshell 结束后 cwd 自动回到 repo root
           echo "=== server bundle size ==="
           du -sh shell/src-tauri/server
           echo "=== server bundle top-level ==="

@@ -2264,6 +2264,7 @@ async function checkConfig() {
 | 17 | （未预料） | **matrix 加 macos-13 (x64) + macos-latest (ARM64) 两个 entry** | `macos-latest` 现在是 ARM64，旧 matrix 只加 x64 entry 架构不匹配（v0.3.1.6 实测发现）| 一直保持 |
 | 18 | （未预料） | **main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀** | `app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed path，`Command::new()` 历史上不友好接受；加 tracing + eprintln 兑底（v0.3.1.7 Windows 运行时发现）| 一直保持 |
 | 19 | （未预料） | **CI deploy 改用 `pnpm install --shamefully-hoist`（不用 `pnpm deploy`）** | `pnpm deploy` 生成 pnpm 内部 symlink 布局（`express -> .pnpm/express@4.22.2/...`），Windows NSIS installer 提取时**不保留 symlinks** → 运行时 `import 'express'` 找不到 package。改用 `pnpm install --shamefully-hoist` 物理化所有 deps 到 `node_modules/` 顶层（npm-style，零 symlink）| 一直保持 |
+| 20 | （未预料） | **CI deploy 用 subshell 隔离 cwd** | `cd shell/src-tauri/server; cd ../..` 只回退 2 级到 `shell/`，du/ls 拼路径找不到；WSL 验证没复现，CI runner pnpm v11 表现不同。用 `subshell` 自动回 cwd，加 `set -euo pipefail` 严格 fail-fast | 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3292,6 +3293,8 @@ package.json   ← Node 解析入口
 5. ✅ **为跨平台打包，优先选 `pnpm install --shamefully-hoist`**——所有 installer 平台都一致
 6. ✅ **`pnpm install --shamefully-hoist` flag 不一定生效**——v0.3.1.8 踩坑，改为 `.npmrc` + `node-linker=hoisted` 才真正有效
 7. ✅ **`file <path>` 是判断 symlink vs 真实目录的最简方法**——`ls` 跟随 symlink 看不到真相
+8. ✅ **CI 脚本 cd 路径必须可移植**——v0.3.1.9 踩坑（`cd ../..` 路径错位），用 `subshell` 或 `pushd/popd` 或 `$GITHUB_WORKSPACE` 环境变量
+9. ✅ **WSL + pnpm v10 ≠ CI pnpm v11**——本地验证 ok 不代表 CI 验证 ok，CI runner 默认版本变化会触发未预期 bug
 
 **调试手册**（Windows installer 缺依赖第一看哪里）：
 
@@ -3880,3 +3883,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-16 | 0.3.1.7 | **Windows installer 运行时问题（UNC path 修正）**：（1）§9.13.16 新增，记录 Windows .exe 装上后运行 1s 挂掉、log 只 5 行的诊断；（2）问题 H：`app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed canonicalized path，`Command::new()` 历史上不友好接受这个前缀，导致 spawn 隐式失败；（3）3 个叠加坑：UNC prefix + GUI app stderr 不可见 + tracing_appender::non_blocking 缓冲 panic 时丢 log；（4）修正：main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀 + `eprintln!` 兑底可见性 + 关键路径同步 flush；（5）§9.13.1 修正总览表新增 Gap 18（UNC path）；（6）调试手册：Windows 运行时问题第一看 log file → 试 node.exe --version → 试 node server\dist\index.js → 检查 UNC prefix |
 | 2026-06-16 | 0.3.1.8 | **NSIS symlink 丢失修正**：（1）§9.13.17 新增，记录 Windows installer 装上后 `Cannot find package 'express'` 的诊断；（2）问题 I：`pnpm deploy` 生成 pnpm 内部 symlink 布局（`node_modules/express -> .pnpm/express@4.22.2/...`），NSIS installer 提取时**不保留 symlinks**（Windows API 不走 SeCreateSymbolicLinkPrivilege）→ Node 解析 `import 'express'` 找不到入口；（3）用户截图确认：`server/node_modules/.pnpm/` 下所有包都在，但 `server/node_modules/express` symlink 缺失（只剩 .bin .pnpm .modules.yaml）；（4）修正：CI deploy step 改用 `cp dist + cp package.json + pnpm install --prod --shamefully-hoist`（npm-style flat 物理文件，零 symlink）；（5）§9.13.1 修正总览表新增 Gap 19（NSIS symlink 丢失）；（6）WSL 端到端验证：物理文件生成 ✅，node 启动 ✅，curl /api/platform/health 200 ✅；（7）学习：跨平台 installer macOS DMG / Linux deb/rpm 用 `cp -a` 保 symlink，Windows NSIS 不保；为跨平台打包优先 `--shamefully-hoist` |
 | 2026-06-16 | 0.3.1.9 | **v0.3.1.8 验证不充分修正**：（1）`pnpm install --shamefully-hoist` flag 在 pnpm 10 + workspace context 下被覆盖，产物仍含 symlink → v0.3.1.8 修复无效；（2）改用 `.npmrc` + `node-linker=hoisted`（pnpm 官方推荐"模拟 npm"模式），`file node_modules/express` → `directory` ✅；（3）修 build.yml：加 `echo 'node-linker=hoisted' > .npmrc` 在 `pnpm install` 之前；（4）WSL 端到端重验证：物理目录 ✅、server 启动 ✅、curl /api/platform/health 200 ✅；（5）§9.13.17 补充"v0.3.1.8 → v0.3.1.9 修订原因"段；（6）学习 6/7：--shamefully-hoist flag 不一定生效、node-linker=hoisted 是 .npmrc 配置项、file 才是判断 symlink 真相的方法 |
+| 2026-06-16 | 0.3.1.10 | **v0.3.1.9 CI cd 路径 bug 修正**：（1）v0.3.1.9 CI 报 `du: shell/src-tauri/server: No such file or directory`——`cd shell/src-tauri/server; cd ../..` 只回退 2 级到 `shell/`，du 拼出 `shell/src-tauri/server` 不存在；（2）WSL 本地验证没复现（pnpm v10.32.1），CI runner 用 pnpm v11.7.0 表现不同；（3）修法：deploy 操作包进 `subshell`（`( ... )`），subshell 结束自动回到 repo root，从根本上消除 cd 路径错误；（4）subshell 内加 `set -euo pipefail` 严格 fail-fast；（5）§9.13.1 修正总览表新增 Gap 20（CI cd 路径 bug）；（6）学习 8/9：CI 脚本 cd 路径必须可移植（subshell / pushd / GITHUB_WORKSPACE）；WSL pnpm v10 ≠ CI pnpm v11，本地验证不等于 CI 验证 |

@@ -18,6 +18,18 @@ use tracing::{error, info, warn};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+// === UNC prefix stripper (Windows canonicalize adds \\?\ that breaks Command::new) ===
+
+/// Strip Windows UNC prefix (`\\?\`) that Path::canonicalize adds.
+/// CreateProcess + Rust on Windows 不友好接受这个前缀。
+/// 详见 docs/technical/TECH-DESIGN.md §9.13.16
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    path.to_string_lossy()
+        .strip_prefix(r"\\?\")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
 // === Target triple helper (Tauri 2 sidecar renames externalBin to <name>-<target-triple>) ===
 
 /// Cargo target triple. Tauri 2 renames `externalBin` entries from
@@ -51,6 +63,8 @@ fn resolve_server_entry<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf
             .path()
             .resource_dir()
             .expect("failed to get resource dir");
+        // ★ v0.3.1.7: strip UNC prefix (\\?\)
+        let resource_dir = strip_unc_prefix(&resource_dir);
         resource_dir.join("server").join("dist").join("index.js")
     }
 }
@@ -77,6 +91,8 @@ fn resolve_node_runner<R: tauri::Runtime>(
             .path()
             .resource_dir()
             .expect("failed to get resource dir");
+        // ★ v0.3.1.7: strip UNC prefix (\\?\)
+        let resource_dir = strip_unc_prefix(&resource_dir);
         // Tauri 2 renames externalBin entries by appending the cargo target triple:
         //   node (externalBin base name)
         //     → node-x86_64-unknown-linux-gnu        (Linux)
@@ -200,6 +216,7 @@ impl NodeProcess {
             "Spawning Node runner: {:?} {:?}",
             config.node_runner, config.node_args
         );
+        eprintln!("[desktopwork] Spawning Node runner: {:?}", config.node_runner);
 
         let mut child = tokio::process::Command::new(&config.node_runner)
             .args(&config.node_args)
@@ -207,7 +224,26 @@ impl NodeProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("Failed to spawn Node process: {}", e))?;
+            .map_err(|e| {
+                eprintln!("[desktopwork] spawn FAILED: {}", e);
+                format!("Failed to spawn Node process: {}", e)
+            })?;
+
+        // ★ v0.3.1.7: 立即 try_wait 探活，看 Node 是不是瞬间死了
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let err = format!("Node process exited immediately with status: {:?}", status);
+                eprintln!("[desktopwork] {}", err);
+                return Err(err);
+            }
+            Ok(None) => {
+                // 进程还在跑，正常
+            }
+            Err(e) => {
+                eprintln!("[desktopwork] try_wait failed: {}", e);
+            }
+        }
 
         // Pipe Node stdout into the tracing logger with [node] prefix
         if let Some(stdout) = child.stdout.take() {

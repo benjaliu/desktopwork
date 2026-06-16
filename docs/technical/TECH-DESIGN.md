@@ -2265,6 +2265,7 @@ async function checkConfig() {
 | 18 | （未预料） | **main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀** | `app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed path，`Command::new()` 历史上不友好接受；加 tracing + eprintln 兑底（v0.3.1.7 Windows 运行时发现）| 一直保持 |
 | 19 | （未预料） | **CI deploy 改用 `pnpm install --shamefully-hoist`（不用 `pnpm deploy`）** | `pnpm deploy` 生成 pnpm 内部 symlink 布局（`express -> .pnpm/express@4.22.2/...`），Windows NSIS installer 提取时**不保留 symlinks** → 运行时 `import 'express'` 找不到 package。改用 `pnpm install --shamefully-hoist` 物理化所有 deps 到 `node_modules/` 顶层（npm-style，零 symlink）| 一直保持 |
 | 20 | （未预料） | **CI deploy 用 subshell 隔离 cwd** | `cd shell/src-tauri/server; cd ../..` 只回退 2 级到 `shell/`，du/ls 拼路径找不到；WSL 验证没复现，CI runner pnpm v11 表现不同。用 `subshell` 自动回 cwd，加 `set -euo pipefail` 严格 fail-fast | 一直保持 |
+| 21 | （业务决定） | **matrix 去掉 macos-13 (x64) entry** | macos-13 Intel runner 启动有问题；Apple 已全面转向 ARM64，Intel Mac 用户极少。v0.1 聚焦 ARM64 + Windows 跑通，未来按需加回 | v0.2+ 考虑加回 |
 
 #### 9.13.2 v0.3.1 实际架构图
 

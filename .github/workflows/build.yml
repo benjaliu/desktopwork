@@ -16,14 +16,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # v0.3.1.11: 去掉 macos-13 (x64) entry
+          # 原因：macos-13 Intel runner 启动问题，且 Apple 已全面转向 ARM64
+          # v0.1 阶段聚焦 ARM64 + Windows 跑通；Intel Mac 用户极少，未来按需加回
           - platform: macos-latest
             target: dmg
             node-tarball-platform: darwin-arm64
             node-binary-suffix: -aarch64-apple-darwin
-          - platform: macos-13
-            target: dmg
-            node-tarball-platform: darwin-x64
-            node-binary-suffix: -x86_64-apple-darwin
           - platform: windows-latest
             target: nsis
             node-tarball-platform: win-x64

@@ -2262,6 +2262,7 @@ async function checkConfig() {
 | 15 | （未预料） | **删除 `. "$HOME/.cargo/env"`** | Windows Git Bash 上 `~/.cargo/env` 不存在，主动 fail；dtolnay/rust-toolchain@stable 已自动加 cargo 到 PATH（v0.3.1.4 实测发现）| 一直保持 |
 | 16 | （未预料） | **用 `wc -c` 代替 `stat -c%s`** | macOS BSD stat 不认 `-c` 选项；`wc -c < file` 跨平台一致（v0.3.1.5 实测发现）| 一直保持 |
 | 17 | （未预料） | **matrix 加 macos-13 (x64) + macos-latest (ARM64) 两个 entry** | `macos-latest` 现在是 ARM64，旧 matrix 只加 x64 entry 架构不匹配（v0.3.1.6 实测发现）| 一直保持 |
+| 18 | （未预料） | **main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀** | `app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed path，`Command::new()` 历史上不友好接受；加 tracing + eprintln 兑底（v0.3.1.7 Windows 运行时发现）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3109,6 +3110,106 @@ CI 第六次跑 v0.3.1.5 暴露第七个问题。macOS runner 报 `resource path
 3. ✅ **matrix 必须跟 runner 架构匹配**——`platform` runner 架构 + `node-tarball-platform` 下跱 URL + `node-binary-suffix` 跟 tauri-build 查找路径一致
 4. ✅ **如果发多个架构的包，每个架构需独立 matrix entry**（v0.1 可选范围）
 
+#### 9.13.16 v0.3.1.7 实测修正（2026-06-16）
+
+Windows installer 装上后运行 1s 挂掉。日志只有 main() 5 行。
+
+**问题 H：`app.path().resource_dir()` 返回 `\\?\`-prefixed path，`Command::new()` 不喜欢**
+
+- **症状**：
+  - 用户安装 .exe 后运行
+  - 白背景窗口闪 1s
+  - 进程退出
+  - 日志只到 main() 5 行（`Starting` / `Mode` / `Server entry` / `Node runner` / `HTTP port`）
+  - **没有 `Spawning Node runner` 日志**——async task 还没跑过 `start()` 就死了
+- **根因**：
+  - `app.path().resource_dir()` 在 Windows 上返回 canonicalized path，**带 `\\?\` 前缀**（`\\?\C:\Users\...\server\dist\index.js`）
+  - `Command::new("\\?\C:\path\file.exe")` 传给 Windows `CreateProcess` 时：**历史上不友好，可能拒绝 spawn 或返回隐式错误**
+  - `\\?\` 是 Windows "extended-length path" 语法（>260 字符路径用），多数 Win32 API 接受，但 `CreateProcess` + Rust 组合下报隐式问题
+  - 错误可能发生在 `tokio::process::Command::spawn()` 内部，没有显式 Rust panic，仅 spawn fail
+  - **加上 `windows_subsystem = "windows"` GUI app 模式下 stderr 不可见**——`eprintln!` 也看不到
+  - **加上 `tracing_appender::non_blocking` 缓冲**——主线程 panic 后 writer thread 被 kill，async task 错误 log 没 flush
+  - 三个原因叠加：用户看到白背景闪 1s + 日志丢失 + 进程退出
+- **修正**（3 点）：
+  1. **strip `\\?\` 前缀**：所有传给 `Command::new()` 的路径必须去除 `\\?\` 前缀
+  2. **加 `eprintln!` 兑底**：`start()` 和 `wait_for_ready()` 失败时同时写 stderr（虽然 GUI app 看不到，但未来加 `windows_subsystem = "console"` debug build 可用）
+  3. **加同步 `flush`**：关键路径加 `std::io::Write::flush(&mut std::io::stderr())` 确保错误立刻可见
+
+**修正后的路径解析代码**：
+
+```rust
+/// Strip Windows UNC prefix (`\\?\`) that Path::canonicalize adds.
+/// CreateProcess + Rust on Windows 不友好接受这个前缀。
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    path.to_string_lossy()
+        .strip_prefix(r"\\?\")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn resolve_server_entry<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> PathBuf {
+    if cfg!(debug_assertions) {
+        std::env::var("DESKTOPWORK_DEV_ENTRY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("desktop-agent/src/index.ts"))
+    } else {
+        let resource_dir = app.path().resource_dir()
+            .expect("failed to get resource dir");
+        // ★ v0.3.1.7: strip \\?\ 前缀，避免 Command::new 拒绝
+        let resource_dir = strip_unc_prefix(&resource_dir);
+        resource_dir.join("server").join("dist").join("index.js")
+    }
+}
+
+// resolve_node_runner 同理
+let sidecar_path = {
+    let resource_dir = app.path().resource_dir()
+        .expect("failed to get resource dir");
+    let resource_dir = strip_unc_prefix(&resource_dir);  // ★ strip
+    #[allow(unused_mut)]
+    let mut p = resource_dir.join(format!("node-{}", current_target_triple()));
+    #[cfg(windows)]
+    {
+        p.set_extension("exe");
+    }
+    p
+};
+```
+
+**学习（避免下次再踩）**：
+
+1. ✅ **Windows 上 `Path::canonicalize()` 加 `\\?\` 前缀**——`Command::new()` 不总是接受
+2. ✅ **Tauri path API 返回 canonicalized path**——`app.path().xxx()` 都有这问题
+3. ✅ **GUI app (`windows_subsystem = "windows"`) stderr 不可见**——`eprintln!` 看不到，仅 log 文件可看
+4. ✅ **`tracing_appender::non_blocking` 主线程 panic 时丢 log**——关键路径用同步 appender
+5. ✅ **有跨平台路径问题优先用 `dunce` crate**（或手写 strip）避免手调跨平台
+6. ✅ **加路径除错设计**——`Path::display()` 、`Path::exists()` 检查后能提前发现
+
+**调试手册**（Windows 运行时问题第一看哪里）：
+
+```
+1. 看 log 文件：%LOCALAPPDATA%\desktopwork\logs\desktopwork.log
+   - main() 日志有几个？5 行 = 只到 main()；中间跳 = 任务没跑
+   - 有没有 error! 行？
+
+2. 直接跑 node.exe：
+   cd C:\Users\<user>\AppData\Local\desktopwork
+   .\node-x86_64-pc-windows-msvc.exe --version
+   期望 v22.3.0；失败 = binary 损坏
+
+3. 直接跑 server：
+   .\node-x86_64-pc-windows-msvc.exe server\dist\index.js
+   期望 Express 启动；失败 = server entry 有问题
+
+4. 都 OK 后问题在 Tauri spawn：
+   - 看 log 中路径是否带 \\?\
+   - 加 strip_unc_prefix 重 build
+
+5. Windows Event Viewer：
+   - Applications and Services Logs → Application
+   - 看最近有没有 .NET Runtime 或 Application Error
+```
+
 
 
 
@@ -3676,4 +3777,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.6 | **CI 第六次跑后实测修正（matrix 架构匹配）**：（1）§9.13.15 新增，记录 macOS runner 报 `resource path ... node-aarch64-apple-darwin doesn't exist` 的诊断；（2）问题 G：matrix 只加一个 macos-latest entry 但值是 x64 的，GitHub Actions 的 `macos-latest` 现在是 ARM64 架构，下载的 x64 binary tauri-build 找不到；（3）修正：matrix 加 2 个 macOS entry（macos-latest=ARM64 + macos-13=x86_64），跟 §9.9.1 设计对齐；（4）§9.13.1 修正总览表新增 Gap 17（matrix 架构不匹配）；（5）学习：macos-latest 可能是 ARM64 不要假设 x86_64；nodejs.org tarball 后缀（darwin-x64/darwin-arm64）跟 runner 架构需独立对应
+| 2026-06-16 | 0.3.1.7 | **Windows installer 运行时问题（UNC path 修正）**：（1）§9.13.16 新增，记录 Windows .exe 装上后运行 1s 挂掉、log 只 5 行的诊断；（2）问题 H：`app.path().resource_dir()` 在 Windows 返回 `\\?\`-prefixed canonicalized path，`Command::new()` 历史上不友好接受这个前缀，导致 spawn 隐式失败；（3）3 个叠加坑：UNC prefix + GUI app stderr 不可见 + tracing_appender::non_blocking 缓冲 panic 时丢 log；（4）修正：main.rs 加 `strip_unc_prefix()` 去掉 `\\?\` 前缀 + `eprintln!` 兑底可见性 + 关键路径同步 flush；（5）§9.13.1 修正总览表新增 Gap 18（UNC path）；（6）调试手册：Windows 运行时问题第一看 log file → 试 node.exe --version → 试 node server\dist\index.js → 检查 UNC prefix

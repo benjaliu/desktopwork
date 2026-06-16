@@ -2261,6 +2261,7 @@ async function checkConfig() {
 | 14 | （未预料） | **CI step 加 `set -euo pipefail` + cache 优先 + 文件大小校验** | download step 静默失败 / cache 覆盖新文件 / 404 HTML 混入（v0.3.1.3 实测发现）| 一直保持 |
 | 15 | （未预料） | **删除 `. "$HOME/.cargo/env"`** | Windows Git Bash 上 `~/.cargo/env` 不存在，主动 fail；dtolnay/rust-toolchain@stable 已自动加 cargo 到 PATH（v0.3.1.4 实测发现）| 一直保持 |
 | 16 | （未预料） | **用 `wc -c` 代替 `stat -c%s`** | macOS BSD stat 不认 `-c` 选项；`wc -c < file` 跨平台一致（v0.3.1.5 实测发现）| 一直保持 |
+| 17 | （未预料） | **matrix 加 macos-13 (x64) + macos-latest (ARM64) 两个 entry** | `macos-latest` 现在是 ARM64，旧 matrix 只加 x64 entry 架构不匹配（v0.3.1.6 实测发现）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3059,6 +3060,55 @@ CI 第五次跑 v0.3.1.4 暴露第六个问题。macOS runner 报 `stat: illegal
 3. ✅ **CI bash 脚本要避免 GNU 专属语法**：能 cross-platform 写就 cross-platform 写
 4. ✅ **macOS / Linux 跨平台脚本基本 all on 官方 POSIX 集合**：coreutils/awk/grep 跨平台一致，`stat/date/find` 有差异
 
+#### 9.13.15 v0.3.1.6 实测修正（2026-06-16）
+
+CI 第六次跑 v0.3.1.5 暴露第七个问题。macOS runner 报 `resource path ... doesn't exist`。
+
+**问题 G：matrix 没匹配 runner 架构**
+
+- **症状**：CI 跑完后报：
+  ```
+  resource path `../node-binaries/node-aarch64-apple-darwin` doesn't exist
+  ```
+- **根因**：
+  - 当前 matrix 只在 macos-latest 下加了一个 entry，值是 `darwin-x64` + `-x86_64-apple-darwin`
+  - **GitHub Actions 的 `macos-latest` 现在是 `macos-14`（Apple Silicon / aarch64）**——不是 x86_64
+  - tauri-build 看 `TARGET=aarch64-apple-darwin`，拼接出 `../node-binaries/node-aarch64-apple-darwin`，跟下载的 x86_64 binary 名字不匹配 → 找不到
+  - §9.9.1 设计本来说两个 macOS runner：`macos-12` (x64) + `macos-14` (ARM64)。但 build.yml 只加了一个 entry，还错用 x64 的值
+- **修正**：matrix 加 2 个 macOS entry（x64 + ARM64），跟 §9.9.1 设计对齐：
+  ```yaml
+  matrix:
+    include:
+      - platform: macos-latest       # ARM64 (Apple Silicon, M1/M2/M3)
+        target: dmg
+        node-tarball-platform: darwin-arm64
+        node-binary-suffix: -aarch64-apple-darwin
+      - platform: macos-13           # x86_64 (Intel, 还在 GitHub Actions 提供)
+        target: dmg
+        node-tarball-platform: darwin-x64
+        node-binary-suffix: -x86_64-apple-darwin
+      - platform: windows-latest
+        target: nsis
+        node-tarball-platform: win-x64
+        node-binary-suffix: -x86_64-pc-windows-msvc.exe
+  ```
+  现在 3 个 job：macos-arm64 / macos-x64 / windows-x64，每个下载自己的 Node binary。
+- **GitHub Actions runner 架构参考表**（2026-06 实测）：
+  | Runner 名字 | 架构 | CPU |
+  |------------|------|-----|
+  | `ubuntu-latest` | x86_64 | Intel/AMD |
+  | `macos-13` | x86_64 | Intel |
+  | `macos-14` / `macos-15` / `macos-latest` | aarch64 | Apple Silicon |
+  | `windows-latest` | x86_64 | Intel/AMD |
+  `macos-12` 已被 GitHub 迨役，不推荐。
+
+**学习（避免下次再踩）**：
+
+1. ✅ **`macos-latest` 可能是 ARM64**——不要假设是 x86_64
+2. ✅ **nodejs.org tarball 后缀 `darwin-x64` ≠ macOS runner 架构**——runner 是 ARM64 要下 `darwin-arm64`
+3. ✅ **matrix 必须跟 runner 架构匹配**——`platform` runner 架构 + `node-tarball-platform` 下跱 URL + `node-binary-suffix` 跟 tauri-build 查找路径一致
+4. ✅ **如果发多个架构的包，每个架构需独立 matrix entry**（v0.1 可选范围）
+
 
 
 
@@ -3626,4 +3676,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.5 | **CI 第五次跑后实测修正（stat 跨平台语法）**：（1）§9.13.14 新增，记录 macOS runner 报 `stat: illegal option -- c` 的诊断；（2）问题 F：`stat -c%s` 是 GNU stat 语法，macOS BSD stat 不支持；用 `stat -f%z` 又跟 Windows 不一致；（3）修正：用 `wc -c < file | tr -d ' \n'` 跨平台 portable，true 跨平台一致；（4）§9.13.1 修正总览表新增 Gap 16（stat 跨平台）；（5）学习：CI bash 避免 GNU 专属语法，coreutils 跨平台有差异（stat / date / find），wc/awk/grep 跨平台一致
+| 2026-06-16 | 0.3.1.6 | **CI 第六次跑后实测修正（matrix 架构匹配）**：（1）§9.13.15 新增，记录 macOS runner 报 `resource path ... node-aarch64-apple-darwin doesn't exist` 的诊断；（2）问题 G：matrix 只加一个 macos-latest entry 但值是 x64 的，GitHub Actions 的 `macos-latest` 现在是 ARM64 架构，下载的 x64 binary tauri-build 找不到；（3）修正：matrix 加 2 个 macOS entry（macos-latest=ARM64 + macos-13=x86_64），跟 §9.9.1 设计对齐；（4）§9.13.1 修正总览表新增 Gap 17（matrix 架构不匹配）；（5）学习：macos-latest 可能是 ARM64 不要假设 x86_64；nodejs.org tarball 后缀（darwin-x64/darwin-arm64）跟 runner 架构需独立对应

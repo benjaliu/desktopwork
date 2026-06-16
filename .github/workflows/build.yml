@@ -121,31 +121,30 @@ jobs:
         # 产出 desktop-agent/dist/
 
       # === 5. 准备 bundle 资源（关键步骤） ===
-      - name: Deploy server bundle to shell (v0.3.1.10)
+      - name: Deploy server bundle to shell (v0.3.1.12)
         run: |
-          # ★ v0.3.1.8/9/10: 不用 pnpm deploy（生成 symlink，NSIS 提取时丢失）
-          # 改用 cp dist + .npmrc + pnpm install --prod 物理化所有 deps
-          # v0.3.1.9: --shamefully-hoist flag 不够，必须用 .npmrc node-linker=hoisted
-          # v0.3.1.10: 修 cd ../.. 错误路径 bug（v0.3.1.9 在 pnpm v11 下表现不同导致 cwd 错误）
+          # ★ v0.3.1.12: 不用 pnpm install + node-linker=hoisted（pnpm v11 + workspace context 下不可靠）
+          # 改用 npm install（默认就是 hoisted 布局，跨 npm/pnpm 版本一致）
+          # v0.3.1.8/9/10/11 多个版本踩坑：pnpm 在独立位置 + subshell 下 silent fail
           # 理由：见 docs/technical/TECH-DESIGN.md §9.13.17
 
-          # 用 subshell 隔离 cwd，结束后自动回到 repo root（避免 cd 路径错误）
-          (
-            set -euo pipefail
-            rm -rf shell/src-tauri/server
-            mkdir -p shell/src-tauri/server
-            cp -r desktop-agent/dist shell/src-tauri/server/dist
-            cp desktop-agent/package.json shell/src-tauri/server/package.json
+          # 用 $GITHUB_WORKSPACE 显式回根（避免 cd 路径错位）
+          cd "$GITHUB_WORKSPACE"
 
-            # ★ node-linker=hoisted: 强制所有 deps 提升到 node_modules/ 顶层（npm-style，零 symlink）
-            # 跨平台一致：macOS DMG / Linux deb-rpm / Windows NSIS 行为相同
-            echo "node-linker=hoisted" > shell/src-tauri/server/.npmrc
+          rm -rf shell/src-tauri/server
+          mkdir -p shell/src-tauri/server
+          cp -r desktop-agent/dist shell/src-tauri/server/dist
+          cp desktop-agent/package.json shell/src-tauri/server/package.json
 
-            cd shell/src-tauri/server
-            pnpm install --prod
-          )
+          # ★ 改用 npm install（默认就是 hoisted 布局，无须 flag，跨平台一致）
+          # --omit=dev = --prod
+          # --no-audit --no-fund = 跳过无关检查
+          cd shell/src-tauri/server
+          npm install --omit=dev --no-audit --no-fund
 
-          # subshell 结束后 cwd 自动回到 repo root
+          # 显式回根
+          cd "$GITHUB_WORKSPACE"
+
           echo "=== server bundle size ==="
           du -sh shell/src-tauri/server
           echo "=== server bundle top-level ==="

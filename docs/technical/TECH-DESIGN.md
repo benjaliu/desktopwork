@@ -2266,6 +2266,7 @@ async function checkConfig() {
 | 19 | （未预料） | **CI deploy 改用 `pnpm install --shamefully-hoist`（不用 `pnpm deploy`）** | `pnpm deploy` 生成 pnpm 内部 symlink 布局（`express -> .pnpm/express@4.22.2/...`），Windows NSIS installer 提取时**不保留 symlinks** → 运行时 `import 'express'` 找不到 package。改用 `pnpm install --shamefully-hoist` 物理化所有 deps 到 `node_modules/` 顶层（npm-style，零 symlink）| 一直保持 |
 | 20 | （未预料） | **CI deploy 用 subshell 隔离 cwd** | `cd shell/src-tauri/server; cd ../..` 只回退 2 级到 `shell/`，du/ls 拼路径找不到；WSL 验证没复现，CI runner pnpm v11 表现不同。用 `subshell` 自动回 cwd，加 `set -euo pipefail` 严格 fail-fast | 一直保持 |
 | 21 | （业务决定） | **matrix 去掉 macos-13 (x64) entry** | macos-13 Intel runner 启动有问题；Apple 已全面转向 ARM64，Intel Mac 用户极少。v0.1 聚焦 ARM64 + Windows 跑通，未来按需加回 | v0.2+ 考虑加回 |
+| 22 | （未预料） | **CI deploy 改用 `npm install` 代替 `pnpm install`** | pnpm v11 + `node-linker=hoisted` + 独立位置 + subshell + `set -e` 组合下 silent fail（`68K + 无 node_modules`）。npm 默认就是 hoisted 布局，无须 flag，跨 npm/pnpm 版本一致 | 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -3296,6 +3297,8 @@ package.json   ← Node 解析入口
 7. ✅ **`file <path>` 是判断 symlink vs 真实目录的最简方法**——`ls` 跟随 symlink 看不到真相
 8. ✅ **CI 脚本 cd 路径必须可移植**——v0.3.1.9 踩坑（`cd ../..` 路径错位），用 `subshell` 或 `pushd/popd` 或 `$GITHUB_WORKSPACE` 环境变量
 9. ✅ **WSL + pnpm v10 ≠ CI pnpm v11**——本地验证 ok 不代表 CI 验证 ok，CI runner 默认版本变化会触发未预期 bug
+10. ✅ **subshell + `set -e` 容易 silent fail**——v0.3.1.10 踩坑，错误被吞掉；优先用显式 `cd $GITHUB_WORKSPACE`
+11. ✅ **跨工具链（pnpm vs npm）默认行为差异巨大**——pnpm 默认 symlink 布局，npm 默认 hoisted 布局；CI 脚本优先用最通用工具，跨版本稳定
 
 **调试手册**（Windows installer 缺依赖第一看哪里）：
 

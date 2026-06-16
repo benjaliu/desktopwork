@@ -2257,6 +2257,7 @@ async function checkConfig() {
 | 10 | Node binary CI 不下载 | **CI actions/cache + curl nodejs.org 下载** | 自包含应用要求 Node 随包分发 | 一直保持 |
 | 11 | （未预料） | **所有 CI `run:` step 加 `shell: bash`** | Windows runner 默认是 PowerShell，不认 bash `if [[ ]]`（v0.3.1.1 实测发现）| 一直保持 |
 | 12 | （未预料） | **`externalBin` 用裸基础名 `node`，Tauri 2 自动追加 `-<target-triple>`** | Tauri 2 不支持 `${platform}` 占位符（v0.3.1.1 实测发现）| 一直保持 |
+| 13 | （未预料） | **`node-tarball-platform` matrix 值用 `win-x64`（不是 `windows-x64`）** | nodejs.org 官方 tarball 命名是 `win-x64`（v0.3.1.2 实测发现）| 一直保持 |
 
 #### 9.13.2 v0.3.1 实际架构图
 
@@ -2873,6 +2874,44 @@ matrix:
 2. ✅ **Windows CI 必须显式 `shell: bash`**：永远不要假设 runner 默认 shell 跨平台一致
 3. ✅ **设计文档和实测差异要立刻记录**：§9.13.10 这种实测修正节比 §9 早期版本的可信度高
 
+#### 9.13.11 v0.3.1.2 实测修正（2026-06-16）
+
+CI 第二次跑 v0.3.1.1 暴露第三个细节问题。
+
+**问题 C：`node-tarball-platform` 用错值**
+
+- **症状**：CI run 在 Windows runner 上下 载 step 报错 `End-of-central-directory signature not found`，下载了 14 字节的 HTML 404 页。
+- **根因**：nodejs.org 官方 tarball 命名约定是 **`win-x64`**（不是 `windows-x64`！）。完整映射：
+  | CI 平台 | nodejs.org tarball 后缀 |
+  |---------|----------------------|
+  | Linux x64 | `linux-x64` ✅ |
+  | macOS Intel | `darwin-x64` ✅ |
+  | macOS Apple Silicon | `darwin-arm64` ✅ |
+  | **Windows x64** | **`win-x64`** ✅（不是 `windows-x64` ❌） |
+- **修正**：matrix 的 `node-tarball-platform` 从 `windows-x64` 改为 `win-x64`。**`node-binary-suffix` 不变**（那是 cargo target triple 命名，跟 nodejs.org 无关）。
+
+**修正后的正确 matrix**：
+
+```yaml
+matrix:
+  include:
+    - platform: macos-latest
+      target: dmg
+      node-tarball-platform: darwin-x64            # nodejs.org 命名
+      node-binary-suffix: -x86_64-apple-darwin     # cargo target triple 命名
+    - platform: windows-latest
+      target: nsis
+      node-tarball-platform: win-x64                # ★ nodejs.org 是 win-x64 不是 windows-x64
+      node-binary-suffix: -x86_64-pc-windows-msvc.exe
+```
+
+**学习（避免下次再踩）**：
+
+1. ✅ **nodejs.org 命名约定**：macOS = darwin，Linux = linux，**Windows = win**（不是 windows）
+2. ✅ **CI 遇到 14 字节下载** = 100% 是 URL 404，立刻检查 tarball 名字
+3. ✅ **先 curl -sI 验证 URL 再写 CI**（`curl -sI https://nodejs.org/dist/v22.3.0/node-v22.3.0-win-x64.zip` 应返 200）
+4. ✅ **混淆点**：nodejs.org tarball 后缀（`win-x64`）≠ 我们的 platform 标识（`windows-x64`）≠ cargo target triple（`x86_64-pc-windows-msvc`）—— **三套命名系统不要混**
+
 
 
 
@@ -3440,4 +3479,4 @@ litellm --model gpt-4o --port 4000
 | 2026-06-11 | 0.1 | 初稿（基于假设的 `@anthropic-ai/claude-code` SDK） |
 | 2026-06-12 | 0.2 | **重大重写**：（1）包名修正为 `@anthropic-ai/claude-agent-sdk`；（2）改为 subprocess 集成模型；（3）LLM 配置改为 per-request env 构造；（4）新增流式机制说明；（5）完成 SDK 端到端验证（附录 A）；（6）**Session 管理明确：完整采用 Claude SDK 自带 session 机制**；7）**Session 修订 2：进一步删除 `sessionKey ↔ sdkSessionId` 映射，平台侧零 session 状态**（验证 SDK 7 个 session API）；（8）流式输出 §3.7 加明确结论段；（9）跨平台 cwd 编码规则按 Linux 实测，Windows 编码待实现后实测验证；（10）§9 重写为「打包与分发」，明确 Tauri sidecar + 资源拷贝 + 健康检查 + 跨平台 CI（NSIS/DMG）；（11）§5.8 新增路径解析模块，实现 dev/prod 路径一致（遵循 P3 原则）|
 | 2026-06-16 | 0.3 | **§9 打包架构实测修正**：（1）放弃 Node sidecar，v0.1 改用系统 PATH 的 node/tsx（v0.2+ 再上 sidecar）；（2）WebView 改用 splash data:URL → eval navigate 到 `http://127.0.0.1:3737/`（避免 Tauri 启动时 Node 未就绪的白屏）；（3）tauri.conf.json 不设 `frontendDist` 和 `app.windows[0].url`，避免与 navigate 冲突；（4）main.rs 去掉硬编码 `/mnt/d/projects/...` 路径，改用 `DESKTOPWORK_DEV_ENTRY` 环境变量 + 相对路径；（5）**CI tauri-cli 安装方式改为 `cargo install tauri-cli --version "^2.0.0" --locked`**，不用 npm/pnpm（解决 `tauri: command not found` 根因）；（6）`pnpm install` 不再带 `--no-lockfile`，用仓库 lockfile 保证可重现；（7）CI 用 `cargo tauri build --config <绝对路径>` 代替 `pnpm tauri build`，少一层间接；（8）删除所有临时 debug step（"Debug Tauri setup" 等）；（9）§9.13 列出 9 项 Gap 修正总览、§9.13.3 给出 tauri.conf.json 唯一正确版本、§9.13.4 给出 main.rs 路径解析、§9.13.6 给出 build.yml 唯一正确版本、§9.13.7 给出 8 项打包验证清单、§9.13.8 给出失败诊断决策树；（10）§10.5 重写对齐 §9.13 修正设计 |
-| 2026-06-16 | 0.3.1.1 | **CI 首次跑后实测修正**：（1）§9.13.10 新增，记录 CI run #27587394046 暴露的两个细节问题；（2）问题 A：`bundle.externalBin` 不支持 `${platform}` 占位符——Tauri 2 在 bundle 时把字面 basename 追加 `-<target-triple>` 后缀，CI 下载的 Node binary 必须以同名规则命名（用 matrix.node-binary-suffix 变量控制）；（3）问题 B：Windows runner 默认 shell 是 PowerShell 不是 bash，所有 `run:` step 必须显式 `shell: bash`，否则 `if [[ ]]` 报 "Missing '(' after 'if'"；（4）§9.13.3 tauri.conf.json 示例改成裸基础名 + 解释 Tauri 2 行为；（5）§9.13.4 main.rs 改成用 `current_target_triple()` 拼装，删掉 `current_platform()` 死代码；（6）§9.13.5.1 简化 download step 标注为「v0.3.1 错误版本」，§9.13.6 完整 build.yml 改为 v0.3.1.1 正确版本，所有 step 加 `shell: bash`；（7）§9.13.1 修正总览表新增 Gap 11（Windows shell）和 Gap 12（占位符）；（8）§9.13.7 V13 新增「Windows shell 验证」；（9）§9.13.8 决策树新增「Missing '(' after 'if'」和「ExternalBinNotFound」两个诊断分支 |
+| 2026-06-16 | 0.3.1.2 | **CI 第二次跑后实测修正**：（1）§9.13.11 新增，记录 CI run 第二次 Windows runner 报错 `End-of-central-directory signature not found` 的诊断；（2）问题 C：matrix `node-tarball-platform` 用 `windows-x64`，但 nodejs.org 官方 tarball 命名是 `win-x64`（不是 `windows-x64`），导致下载 14 字节 404 响应；（3）§9.13.10 修正后正确 matrix 改 `node-tarball-platform: win-x64`；（4）§9.13.1 修正总览表新增 Gap 13（nodejs.org tarball 命名）；（5）学习：nodejs.org 命名是 darwin/linux/**win**（不是 windows），与 cargo target triple 命名（x86_64-pc-windows-msvc）和本项目 platform 标识（windows-x64）三套不同 |

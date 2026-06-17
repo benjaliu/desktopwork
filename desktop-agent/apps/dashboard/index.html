@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dashboard — DesktopWork</title>
   <link rel="stylesheet" href="/apps/_shared/styles.css">
+  <link rel="stylesheet" href="/apps/_shared/highlight-theme.css">
   <style>
     .welcome { font-size: 24px; color: #fff; margin-bottom: 8px; }
     .welcome sub { font-size: 14px; color: #666; font-weight: normal; }
@@ -77,6 +78,8 @@
 
   <script src="/apps/_shared/auth.js"></script>
   <script src="/apps/_shared/config.js"></script>
+  <!-- ★ v0.3.1.18: Markdown bundle available for any future bot message rendering on dashboard -->
+  <script type="module" src="/apps/_shared/markdown.bundle.js"></script>
   <script>
     async function init() {
       if (!auth.getToken()) { window.location.href = '/apps/auth/login.html'; return; }

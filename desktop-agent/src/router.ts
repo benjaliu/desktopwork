@@ -33,6 +33,15 @@ export function createRouter(): express.Express {
     });
   });
 
+  // ★ v0.3.1.18: Browser-fallback restart endpoint (manual testing / non-Tauri context).
+  // Public (no auth) so the chat page can hit it directly when opened in a plain browser
+  // (no Tauri shell available, no auth token). The actual Node process restart only
+  // happens in Tauri context via the native 'restart_server' command; this HTTP endpoint
+  // is a no-op stub that just signals to the frontend to reload after 2s.
+  app.post('/api/platform/restart', (_req, res) => {
+    res.json({ status: 'restarting' });
+  });
+
   // Authenticated platform endpoints
   app.use('/api/platform', authMiddleware);
 

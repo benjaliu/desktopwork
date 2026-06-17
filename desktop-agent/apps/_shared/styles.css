@@ -238,3 +238,191 @@ body {
   background: #22c55e;
   margin-right: 6px;
 }
+
+/* === v0.3.1.18: StatusBar (sidebar) === */
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-top: 1px solid #2a2a2a;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.status-bar .status-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.status-bar .status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #22c55e; /* ready */
+  flex-shrink: 0;
+}
+
+.status-bar .status-dot.working {
+  background: #eab308;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-bar .status-dot.error {
+  background: #ef4444;
+}
+
+.status-bar .status-text {
+  color: #a0a0a0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.status-bar .status-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.status-bar button {
+  background: transparent;
+  border: 1px solid #333;
+  color: #a0a0a0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+
+.status-bar button:hover:not(:disabled) {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.status-bar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* === v0.3.1.18: Markdown-rendered code blocks in chat bubbles === */
+.message .bubble pre {
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.message .bubble code {
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.message .bubble pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+}
+
+.message .bubble :not(pre) > code {
+  background: #2a2a2a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+.message .bubble h1,
+.message .bubble h2,
+.message .bubble h3,
+.message .bubble h4,
+.message .bubble h5,
+.message .bubble h6 {
+  color: #fff;
+  margin: 12px 0 8px 0;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.message .bubble h1 { font-size: 20px; }
+.message .bubble h2 { font-size: 18px; }
+.message .bubble h3 { font-size: 16px; }
+.message .bubble h4 { font-size: 15px; }
+.message .bubble h5 { font-size: 14px; }
+.message .bubble h6 { font-size: 13px; }
+
+.message .bubble p {
+  margin: 8px 0;
+}
+
+.message .bubble p:first-child {
+  margin-top: 0;
+}
+
+.message .bubble p:last-child {
+  margin-bottom: 0;
+}
+
+.message .bubble ul,
+.message .bubble ol {
+  margin: 8px 0;
+  padding-left: 24px;
+}
+
+.message .bubble li {
+  margin: 4px 0;
+}
+
+.message .bubble a {
+  color: #3b82f6;
+  text-decoration: none;
+}
+
+.message .bubble a:hover {
+  text-decoration: underline;
+}
+
+.message .bubble blockquote {
+  border-left: 3px solid #3b82f6;
+  padding-left: 12px;
+  margin: 8px 0;
+  color: #a0a0a0;
+}
+
+.message .bubble table {
+  border-collapse: collapse;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.message .bubble th,
+.message .bubble td {
+  border: 1px solid #2a2a2a;
+  padding: 6px 10px;
+  text-align: left;
+}
+
+.message .bubble th {
+  background: #1a1a1a;
+  font-weight: 600;
+}
+
+.message .bubble hr {
+  border: none;
+  border-top: 1px solid #2a2a2a;
+  margin: 12px 0;
+}

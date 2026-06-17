@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Chat — DesktopWork</title>
   <link rel="stylesheet" href="/apps/_shared/styles.css">
+  <link rel="stylesheet" href="/apps/_shared/highlight-theme.css">
 </head>
 <body>
   <div id="app">
@@ -15,7 +16,17 @@
         <a href="/apps/chat/index.html" class="active">Chat</a>
         <a href="/apps/settings/index.html">Settings</a>
       </nav>
-      <div class="status"><span class="dot"></span>Ready</div>
+      <!-- ★ v0.3.1.18: StatusBar with dot + text + reload/restart buttons -->
+      <div class="status-bar" id="status-bar">
+        <div class="status-left">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="status-text" id="status-text">Ready</span>
+        </div>
+        <div class="status-actions">
+          <button id="reload-btn" title="Reload page (Ctrl+R)">↻ 刷新</button>
+          <button id="restart-btn" title="Restart Node server">↴ 重启服务</button>
+        </div>
+      </div>
     </div>
     <div id="main" style="display:flex;flex-direction:column;">
       <div id="chat-messages"></div>
@@ -29,6 +40,8 @@
   <script src="/apps/_shared/auth.js"></script>
   <script src="/apps/_shared/config.js"></script>
   <script src="/apps/_shared/agent.js"></script>
+  <!-- ★ v0.3.1.18: ESM bundle exposes window.marked.render(text) for markdown rendering -->
+  <script type="module" src="/apps/_shared/markdown.bundle.js"></script>
   <script>
     async function init() {
       if (!window.auth.getToken()) {
@@ -39,11 +52,66 @@
       const messagesEl = document.getElementById('chat-messages');
       const inputEl = document.getElementById('chat-input');
       const sendBtn = document.getElementById('send-btn');
+      const statusDot = document.getElementById('status-dot');
+      const statusText = document.getElementById('status-text');
+      const reloadBtn = document.getElementById('reload-btn');
+      const restartBtn = document.getElementById('restart-btn');
       let streamingBubble = null;
 
+      // === StatusBar helpers ===
+      function setStatus(state, text) {
+        statusDot.classList.remove('working', 'error');
+        if (state === 'working') statusDot.classList.add('working');
+        else if (state === 'error') statusDot.classList.add('error');
+        statusText.textContent = text;
+      }
+
+      function setActionsEnabled(enabled) {
+        reloadBtn.disabled = !enabled;
+        restartBtn.disabled = !enabled;
+      }
+
+      // === Restart Server (v0.3.1.18) ===
+      async function restartServer() {
+        setStatus('working', 'Restarting...');
+        setActionsEnabled(false);
+
+        try {
+          if (window.__TAURI__?.invoke) {
+            // Tauri context: invoke native command (preferred path, instant reload via event)
+            await window.__TAURI__.invoke('restart_server');
+            // Tauri emits 'server_restarted' → page reloads (see listener below)
+          } else {
+            // Browser fallback (manual test): POST /api/platform/restart, delay 2s reload
+            const res = await fetch('/api/platform/restart', { method: 'POST' });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            setStatus('working', 'Reloading...');
+            setTimeout(() => window.location.reload(), 2000);
+          }
+        } catch (e) {
+          setStatus('error', `Error: ${e.message || e}`);
+          setActionsEnabled(true);
+          console.error('Restart server failed:', e);
+        }
+      }
+
+      // === Tauri event listener: server_restarted → reload ===
+      if (window.__TAURI__?.event?.listen) {
+        window.__TAURI__.event.listen('server_restarted', () => {
+          window.location.reload();
+        });
+      }
+
+      reloadBtn.addEventListener('click', () => {
+        window.location.reload();
+      });
+      restartBtn.addEventListener('click', restartServer);
+
+      // === Chat message helpers ===
       function addMessage(role, content) {
         const div = document.createElement('div');
         div.className = `message ${role}`;
+        // user messages are plain text (no markdown from user expected in MVP)
         div.innerHTML = `
           <div class="avatar">${role === 'user' ? '👤' : '🤖'}</div>
           <div class="bubble">${escapeHtml(content)}</div>
@@ -78,9 +146,29 @@
         messagesEl.scrollTop = messagesEl.scrollHeight;
       }
 
+      /**
+       * v0.3.1.18: finalizeBubble now renders markdown (session_done = end of stream).
+       * Streaming phase = plain text append (no parse cost). Final phase = marked.render.
+       * If marked isn't ready yet, fall back to raw text. If marked throws, fall back too.
+       */
       function finalizeBubble(bubble, content) {
+        bubble.classList.remove('streaming');
         bubble.querySelector('.cursor')?.remove();
-        bubble.querySelector('.bubble-text').textContent = content;
+        const textSpan = bubble.querySelector('.bubble-text');
+        const safeContent = content || '';
+        try {
+          if (window.marked?.render) {
+            textSpan.innerHTML = window.marked.render(safeContent);
+          } else {
+            // Fallback: marked not loaded (offline? bundle missing?) → plain text
+            textSpan.textContent = safeContent;
+            console.warn('window.marked not available; rendering as plain text');
+          }
+        } catch (e) {
+          // Fallback on parse error (extremely rare; marked is robust)
+          textSpan.textContent = safeContent;
+          console.error('Markdown render failed, falling back to text:', e);
+        }
       }
 
       function setInputEnabled(enabled) {
@@ -95,6 +183,7 @@
         inputEl.value = '';
         addMessage('user', message);
         setInputEnabled(false);
+        setStatus('working', 'Working...');
 
         const bubble = addStreamingBubble();
         let fullText = '';
@@ -111,11 +200,13 @@
               finalizeBubble(bubble, content || fullText);
               if (sessionId) localStorage.setItem('dw_session_id', sessionId);
               setInputEnabled(true);
+              setStatus('ready', 'Ready');
             },
             onError(err) {
               bubble.querySelector('.cursor')?.remove();
               bubble.querySelector('.bubble-text').textContent = `Error: ${err}`;
               setInputEnabled(true);
+              setStatus('error', `Error: ${err}`);
             },
           });
         } catch (e) {
@@ -124,6 +215,7 @@
           if (!bubble.querySelector('.bubble-text').textContent.startsWith('Error:')) {
             bubble.querySelector('.bubble-text').textContent = `Error: ${e.message}`;
             setInputEnabled(true);
+            setStatus('error', `Error: ${e.message}`);
           }
         }
       }

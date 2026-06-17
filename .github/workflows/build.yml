@@ -120,6 +120,18 @@ jobs:
         shell: bash
         # 产出 desktop-agent/dist/
 
+      # ★ v0.3.1.18: Build Markdown bundle (marked + highlight.js) for browser consumption.
+      # Output: desktop-agent/apps/_shared/markdown.bundle.js (ESM, ~170KB)
+      # The bundle is placed in apps/_shared/ (not dist/) because apps/ is the
+      # frontend static root served by express at runtime.
+      - name: Build markdown bundle
+        run: pnpm -F desktop-agent build:markdown
+        shell: bash
+        # 产出 desktop-agent/apps/_shared/markdown.bundle.js
+        # 产出 desktop-agent/apps/_shared/highlight-theme.css
+        # CI deploy step below copies apps/ wholesale to shell/src-tauri/server/apps/
+        # so the bundle is included in the installer automatically.
+
       # === 5. 准备 bundle 资源（关键步骤） ===
       - name: Deploy server bundle to shell (v0.3.1.12)
         run: |

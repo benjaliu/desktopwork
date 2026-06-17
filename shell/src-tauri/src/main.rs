@@ -6,9 +6,8 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
     webview::WebviewWindowBuilder,
-    AppHandle, Manager, Runtime, WebviewUrl,
+    AppHandle, Emitter, Manager, WebviewUrl,
 };
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
@@ -118,7 +117,7 @@ fn resolve_node_runner<R: tauri::Runtime>(
 
 // === Config ===
 
-struct AgentConfig {
+pub struct AgentConfig {
     /// Absolute path to the Node HTTP server entry JS/TS file.
     server_entry: PathBuf,
     /// Node runner binary path (prod = sidecar, dev = "tsx"/"node" on PATH).
@@ -198,7 +197,7 @@ fn setup_logging() {
 
 // === Node Process Manager ===
 
-struct NodeProcess {
+pub struct NodeProcess {
     child: AsyncMutex<Option<Child>>,
     http_port: u16,
     base_url: String,
@@ -220,17 +219,44 @@ impl NodeProcess {
         );
         eprintln!("[desktopwork] Spawning Node runner: {:?}", config.node_runner);
 
-        let mut child = tokio::process::Command::new(&config.node_runner)
-            .args(&config.node_args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| {
+        // ★ v0.3.1.18 (Bug 3 fix): On Windows, set CREATE_NO_WINDOW flag so the
+        // Node sidecar process doesn't briefly pop a black console window.
+        // CREATE_NO_WINDOW = 0x08000000 (Win32 constant).
+        // See docs/technical/TECH-DESIGN.md §9.14 / Bug 3.
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            let mut cmd = tokio::process::Command::new(&config.node_runner);
+            cmd.args(&config.node_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .creation_flags(CREATE_NO_WINDOW);
+            let child = cmd.spawn().map_err(|e| {
                 eprintln!("[desktopwork] spawn FAILED: {}", e);
                 format!("Failed to spawn Node process: {}", e)
             })?;
+            return self.after_spawn(child).await;
+        }
 
+        #[cfg(not(windows))]
+        {
+            let child = tokio::process::Command::new(&config.node_runner)
+                .args(&config.node_args)
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| {
+                    eprintln!("[desktopwork] spawn FAILED: {}", e);
+                    format!("Failed to spawn Node process: {}", e)
+                })?;
+            self.after_spawn(child).await
+        }
+    }
+
+    async fn after_spawn(&self, mut child: Child) -> Result<(), String> {
         // ★ v0.3.1.7: 立即 try_wait 探活，看 Node 是不是瞬间死了
         tokio::time::sleep(Duration::from_millis(100)).await;
         match child.try_wait() {
@@ -292,11 +318,25 @@ impl NodeProcess {
         Err("Node HTTP server did not become ready in 30s".to_string())
     }
 
+    /// v0.3.1.18: stop() now uses SIGKILL directly (MVP per §9.14.0 decision 1).
+    /// Future: SIGTERM with 5s grace, then SIGKILL (requires nix crate, v0.2+).
+    /// We also explicitly `wait()` after kill so the OS reaps the zombie before
+    /// we spawn a new one (prevents "address in use" / port conflicts on restart).
     async fn stop(&self) -> Result<(), String> {
         let mut guard = self.child.lock().await;
-        if let Some(ref mut child) = guard.take() {
-            info!("Stopping Node process");
-            child.kill().await.map_err(|e| e.to_string())?;
+        if let Some(child) = guard.take() {
+            info!("Stopping Node process (SIGKILL MVP)");
+            // tokio::process::Child::kill() sends SIGKILL on Unix, TerminateProcess on Windows
+            // We need to consume the child to call kill (it takes &mut self on tokio).
+            let mut child = child;
+            if let Err(e) = child.kill().await {
+                warn!("kill() returned error (process may already be dead): {}", e);
+            }
+            // Reap the zombie so the next start() doesn't race on the same PID/port
+            if let Err(e) = child.wait().await {
+                warn!("wait() returned error: {}", e);
+            }
+            info!("Node process stopped");
         }
         Ok(())
     }
@@ -304,32 +344,47 @@ impl NodeProcess {
 
 // === App State ===
 
-struct AppState {
-    node_process: Arc<NodeProcess>,
+/// Shared between main() and Tauri command handlers (e.g. restart_server).
+/// Wraps the Node process manager and a clone-able AgentConfig so commands
+/// can re-spawn the Node sidecar using the original resolved config.
+pub struct AppState {
+    pub node_process: Arc<NodeProcess>,
+    pub agent_config: Arc<AgentConfig>,
 }
 
-// === Menu ===
+// === Commands ===
 
-fn create_menu<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
-    let reload = MenuItemBuilder::with_id("reload", "Reload")
-        .accelerator("CmdOrCtrl+R")
-        .build(app)
-        .map_err(|e| e.to_string())?;
+mod commands {
+    use super::*;
 
-    let quit = MenuItemBuilder::with_id("quit", "Quit DesktopWork")
-        .accelerator("CmdOrCtrl+Q")
-        .build(app)
-        .map_err(|e| e.to_string())?;
+    /// ★ v0.3.1.18: Restart the Node sidecar server in place.
+    /// 1. SIGKILL the existing Node process
+    /// 2. Re-spawn with the original AgentConfig
+    /// 3. Emit 'server_restarted' so the frontend can reload
+    /// See docs/technical/TECH-DESIGN.md §9.14.3
+    #[tauri::command]
+    pub async fn restart_server(
+        state: tauri::State<'_, AppState>,
+        app: AppHandle,
+    ) -> Result<(), String> {
+        info!("User requested server restart");
 
-    let menu = MenuBuilder::new(app)
-        .item(&reload)
-        .separator()
-        .item(&quit)
-        .build()
-        .map_err(|e| e.to_string())?;
+        // 1. Stop existing Node
+        state.node_process.stop().await?;
 
-    app.set_menu(menu).map_err(|e| e.to_string())?;
-    Ok(())
+        // 2. Restart with original config
+        state.node_process.start(&state.agent_config).await?;
+
+        // 3. Notify frontend (window.location.reload will follow)
+        if let Err(e) = app.emit("server_restarted", ()) {
+            // Don't fail the whole operation if emit fails — Node is already restarted.
+            // The frontend will eventually hit the new server.
+            warn!("Failed to emit server_restarted event: {}", e);
+        }
+
+        info!("Server restart complete");
+        Ok(())
+    }
 }
 
 // === Loading splash HTML (embedded) ===
@@ -388,12 +443,14 @@ fn main() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // ★ v0.3.1.18: register restart_server command (Bug 4)
+        .invoke_handler(tauri::generate_handler![commands::restart_server])
         .setup(|app| {
             let handle = app.app_handle().clone();
 
             // Resolve runtime paths now that we have an AppHandle (so resource_dir is available).
             // In debug builds this also reads DESKTOPWORK_DEV_ENTRY.
-            let agent_config = AgentConfig::build(&handle);
+            let agent_config = Arc::new(AgentConfig::build(&handle));
 
             info!("DesktopWork starting");
             info!("  Mode: {}", if cfg!(debug_assertions) { "dev" } else { "prod (sidecar)" });
@@ -402,8 +459,11 @@ fn main() {
             info!("  HTTP port: {}", agent_config.http_port);
 
             let node_proc = Arc::new(NodeProcess::new(agent_config.http_port, agent_config.base_url()));
-            let node_proc_for_menu = Arc::clone(&node_proc);
-            app.manage(AppState { node_process: node_proc_for_menu });
+            // ★ v0.3.1.18: share AgentConfig with commands via AppState (so restart_server can re-spawn)
+            app.manage(AppState {
+                node_process: node_proc,
+                agent_config,
+            });
 
             // Step 1: Create window IMMEDIATELY with embedded splash HTML.
             // This prevents the black OS window from showing.
@@ -430,10 +490,17 @@ fn main() {
             })?;
 
             // Step 2: Start Node HTTP server in background, then navigate
-            let node_proc_for_async = Arc::clone(&node_proc);
+            let node_proc_for_async = {
+                let state = app.state::<AppState>();
+                Arc::clone(&state.node_process)
+            };
+            let agent_config_for_async = {
+                let state = app.state::<AppState>();
+                Arc::clone(&state.agent_config)
+            };
             tauri::async_runtime::spawn(async move {
                 // Start Node process
-                if let Err(e) = node_proc_for_async.start(&agent_config).await {
+                if let Err(e) = node_proc_for_async.start(&agent_config_for_async).await {
                     error!("Failed to start Node process: {}", e);
                     // Show error in the webview
                     let _ = window.eval(&format!(
@@ -462,29 +529,13 @@ fn main() {
                 });
             });
 
-            if let Err(e) = create_menu(&handle) {
-                warn!("Failed to create menu: {}", e);
-            }
+            // ★ v0.3.1.18 (Bug 4 fix): removed create_menu() and on_menu_event().
+            // Native menu is replaced by in-app StatusBar (sidebar). Per §9.14.1.
+            // Reload / Quit functionality is now served by:
+            //   - Reload: sidebar "↻ 刷新" button + Ctrl+R (browser default)
+            //   - Quit: window close button (CloseRequested handler above)
 
             Ok(())
-        })
-        .on_menu_event(|app, event| {
-            match event.id().as_ref() {
-                "reload" => {
-                    if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.eval("window.location.reload()");
-                    }
-                }
-                "quit" => {
-                    let app_handle = app.app_handle().clone();
-                    tokio::spawn(async move {
-                        let state = app_handle.state::<AppState>();
-                        let _ = state.node_process.stop().await;
-                        std::process::exit(0);
-                    });
-                }
-                _ => {}
-            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

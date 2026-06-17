@@ -9,17 +9,22 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "start": "node dist/index.js",
-    "test:smoke": "node test/smoke.mjs"
+    "test:smoke": "node test/smoke.mjs",
+    "build:markdown": "node scripts/build-markdown-bundle.js"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.174",
     "cors": "^2.8.5",
     "express": "^4.21.2",
+    "highlight.js": "^11.10.0",
+    "marked": "^14.1.4",
+    "marked-highlight": "^2.2.1",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.0",
+    "esbuild": "^0.24.0",
     "tsx": "^4.22.4",
     "typescript": "^5.7.0"
   }

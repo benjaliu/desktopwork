@@ -953,6 +953,217 @@ export type AgentStreamEvent =
 
 **v0.2+ 扩展**：用 SDK 的 `tool()` + `createSdkMcpServer()` 加载自定义 MCP 工具：
 
+### 5.6.x Chat Markdown 渲染（v0.3.1.18 新增）
+
+> 本节是 §9.14.4 的实现细节补充：前端 Agent.js / chat UI 如何消费 SDK 流式事件并渲染 Markdown。
+
+#### 5.6.x.1 流式事件 → Markdown 渲染
+
+**事件流**（`/api/bot-chat/chat` SSE 输出）：
+
+```
+data: {"type":"text_delta","delta":"# Hello","contentIndex":0}
+data: {"type":"text_delta","delta":" World","contentIndex":0}
+data: {"type":"assistant_message","message":{...}}
+data: {"type":"session_done","sessionId":"...","isError":false}
+```
+
+**前端消费**（`apps/_shared/agent.js` SSE parser）：
+
+```javascript
+// 流式阶段：只缓存原始文本
+if (event.type === 'text_delta') {
+  fullText += event.delta;
+  onDelta?.(event.delta);   // 实时显示 raw text
+} 
+// 收尾阶段：渲染 markdown
+else if (event.type === 'session_done') {
+  sessionId = event.sessionId;
+  onEnd?.(fullText, sessionId);  // 触发 finalizeBubble → marked 渲染
+}
+```
+
+**为什么这样设计**：
+- 流式阶段只累积 `fullText` 字符串，不解析 markdown（性能 + 流式体验）
+- `session_done` 一次性渲染完整 markdown + 代码高亮
+- 用户视觉：实时打字机效果 → 最终呈现完整格式
+
+#### 5.6.x.2 Bubble DOM 结构
+
+**流式期间**：
+
+```html
+<div class="message assistant streaming">
+  <div class="avatar">🤖</div>
+  <div class="bubble">
+    <span class="bubble-text">Hello # World</span>     <!-- raw text 增量追加 -->
+    <span class="cursor">▋</span>                       <!-- 流式光标 -->
+  </div>
+</div>
+```
+
+**session_done 后**（`finalizeBubble` 替换 innerHTML）：
+
+```html
+<div class="message assistant">                          <!-- streaming class 移除 -->
+  <div class="avatar">🤖</div>
+  <div class="bubble">
+    <h1 id="hello">Hello World</h1>                      <!-- marked 渲染 -->
+    <pre><code class="hljs language-python">print("hi")</code></pre>
+  </div>
+</div>
+```
+
+#### 5.6.x.3 依赖与 bundle
+
+**Node 端**（`desktop-agent/package.json`）：
+
+```json
+{
+  "dependencies": {
+    "marked": "^14.1.4",
+    "marked-highlight": "^2.2.1",
+    "highlight.js": "^11.10.0"
+  }
+}
+```
+
+**前端 bundle**（`apps/_shared/markdown.bundle.js`）：
+
+```javascript
+// 用 esbuild 打包 marked + highlight.js 为单文件 ESM
+// CI 步骤：esbuild apps/_shared/markdown.bundle.js --bundle --format=esm
+import { marked } from 'marked';
+import { markedHighlight } from 'marked-highlight';
+import hljs from 'highlight.js/lib/core';
+import javascript from 'highlight.js/lib/languages/javascript';
+import typescript from 'highlight.js/lib/languages/typescript';
+import python from 'highlight.js/lib/languages/python';
+import bash from 'highlight.js/lib/languages/bash';
+import json from 'highlight.js/lib/languages/json';
+// ... 按需 register
+
+hljs.registerLanguage('javascript', javascript);
+hljs.registerLanguage('typescript', typescript);
+hljs.registerLanguage('python', python);
+hljs.registerLanguage('bash', bash);
+hljs.registerLanguage('json', json);
+
+const renderer = marked.use(markedHighlight({
+  langPrefix: 'hljs language-',
+  highlight(code, lang) {
+    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+    return hljs.highlight(code, { language }).value;
+  },
+}));
+
+window.marked = {
+  render(text) {
+    return renderer.parse(text, { 
+      breaks: false, 
+      gfm: true,
+      headerIds: false,
+      mangle: false,
+    });
+  },
+};
+```
+
+**HTML 引用**（`apps/chat/index.html`）：
+
+```html
+<script type="module" src="/apps/_shared/markdown.bundle.js"></script>
+```
+
+#### 5.6.x.4 安全考虑
+
+**marked v14 默认行为**：
+- 不解释原始 HTML（`<script>` 转义为 `&lt;script&gt;`）
+- `gfm: true`（支持 GitHub Flavored Markdown：表格、删除线、任务列表）
+- `breaks: false`（不转换 `\n` 为 `<br>`，保持 markdown 原义）
+
+**不引入 DOMPurify**：
+- LLM response 是受控 markdown 文本
+- marked 默认转义已足够防 XSS
+- DOMPurify 会增加 ~50KB 体积，MVP 不必要
+
+**highlight.js 沙箱**：
+- 输出是 `<span class="hljs-keyword">...</span>` 等语义化标签
+- 不执行任何 JavaScript（静态高亮，无 eval）
+- 第三方审查：highlight.js 是广泛使用的成熟库
+
+#### 5.6.x.5 性能考虑
+
+**流式期间**：不调用 marked.parse（性能最优，每 token 仅一次 DOM appendChild）。
+
+**session_done 后**：一次性 marked.parse 整段文本：
+- < 1KB：< 10ms（用户感知不到）
+- 1-10KB：< 50ms（轻微感知，可接受）
+- 10-100KB：< 500ms（明显延迟，需要 lazy render）
+- > 100KB：v0.2+ 用 IntersectionObserver 懒渲染
+
+**MVP 范围**：回复 < 50KB 时性能无感。LLM 通常不会生成 > 50KB 单条回复。
+
+#### 5.6.x.6 错误处理
+
+**marked 解析失败**（极少见，markdown 语法错误）：
+```javascript
+function finalizeBubble(bubble, content) {
+  try {
+    bubbleText.innerHTML = window.marked.render(content || '');
+  } catch (e) {
+    // Fallback 到 raw text
+    bubbleText.textContent = content || '';
+    console.error('Markdown render failed:', e);
+  }
+}
+```
+
+**highlight.js 未知语言**：
+- `hljs.getLanguage(lang) ? lang : 'plaintext'` → fallback 到纯文本
+- 不抛错，浏览器控制台 warn 一行
+
+#### 5.6.x.7 样式集成
+
+**代码块样式**（`apps/_shared/styles.css` 新增）：
+
+```css
+.message .bubble pre {
+  background: #0a0a0a;
+  border: 1px solid #2a2a2a;
+  border-radius: 6px;
+  padding: 12px;
+  margin: 8px 0;
+  overflow-x: auto;
+}
+
+.message .bubble code {
+  font-family: 'Menlo', 'Monaco', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.message .bubble pre code {
+  background: transparent;
+  padding: 0;
+  border: none;
+}
+
+.message .bubble :not(pre) > code {
+  background: #2a2a2a;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+
+/* highlight.js atom-one-dark theme colors */
+.hljs { color: #abb2bf; background: #282c34; }
+.hljs-comment, .hljs-quote { color: #5c6370; font-style: italic; }
+.hljs-keyword, .hljs-selector-tag { color: #c678dd; }
+.hljs-string, .hljs-doctag { color: #98c379; }
+/* ... 完整 theme 略，esbuild 时从 highlight.js/styles/atom-one-dark.css 复制 */
+```
+
 ```typescript
 // v0.2+ 草稿
 import { tool, createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
@@ -3325,6 +3536,371 @@ package.json   ← Node 解析入口
 5. 看 .pnpm/express@4.22.2/node_modules/express/ 里面有没有 package.json
    - 有 → pnpm deploy 内部 layout 装下了，只是顶层 symlink 丢了
    - 没有 → pnpm deploy 本身失败
+
+---
+
+### 9.14 UI 控件与 Markdown 渲染策略（v0.3.1.18 新增）
+
+> v0.3.1.17 已修复启动 + chat 流式。装机实测暴露 3 个 UX 问题：
+> 1. Windows spawn node sidecar 期间短暂黑屏 console window
+> 2. 顶部菜单栏视觉突兀（Reload / Quit）
+> 3. Chat 输出未做 Markdown 渲染（PRD §3.1 已要求）
+>
+> 本节给出 v0.3.1.18 的设计决策。实测修正记录在 §9.13.18。
+
+#### 9.14.1 菜单栏策略
+
+**决策**：**不显示 Tauri 原生菜单**。
+
+**理由**：
+- 现代桌面应用（VSCode、Discord、Slack、Notion、Linear）均无 OS 原生菜单栏，控制功能全部内嵌 UI
+- macOS 系统级菜单栏与窗口菜单行为不一致（macOS 在屏幕顶部、Windows 嵌入窗口顶部），体验割裂
+- 控制功能下沉到 sidebar StatusBar 更符合 "AI 工作台" 产品定位
+
+**实现**：
+- `shell/src-tauri/src/main.rs` 的 `create_menu()` **不调用**（或调用但传空 menu items）
+- `tauri::Builder::default()` 不通过 `.menu()` 注册
+- 关闭菜单快捷键 `CmdOrCtrl+Q` 由窗口 `CloseRequested` 事件接管（已有逻辑）
+
+#### 9.14.2 Sidebar StatusBar 设计
+
+**位置**：chat sidebar 底部，替换原"● Ready"单行文本。
+
+**布局**：
+
+```
+┌──────────────────────────────┐
+│ ● Ready    [↻ 刷新] [↴ 重启] │
+└──────────────────────────────┘
+```
+
+**组件**：
+
+| 组件 | 行为 |
+|------|------|
+| **状态指示 dot** | 绿 Ready / 黄 Working / 红 Error，CSS class 切换 |
+| **状态文字** | "Ready" / "Working..." / "Error: <msg>" |
+| **刷新按钮** | `window.location.reload()`（等同原 Ctrl+R） |
+| **重启服务按钮** | invoke Tauri command `restart_server`（见 §9.14.3） |
+
+**样式**（`apps/_shared/styles.css`）：
+```css
+.status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-top: 1px solid #2a2a2a;
+  font-size: 12px;
+  gap: 8px;
+}
+
+.status-bar .status-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.status-bar .status-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.status-bar button {
+  background: transparent;
+  border: 1px solid #333;
+  color: #a0a0a0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.status-bar button:hover {
+  background: #2a2a2a;
+  color: #fff;
+}
+
+.status-bar button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+```
+
+**StatusBar 状态变化**：
+- **Ready → Working**：用户发消息时切换，"Working..." + 黄 dot
+- **Working → Ready**：session_done 时切换，绿 dot
+- **任意 → Error**：chat 错误时切换，红 dot + 错误消息
+
+#### 9.14.3 Restart Server IPC 流程
+
+**目标**：稳定 + 快速 + 无感（用户明确要求）。
+
+##### 9.14.3.1 设计原则
+
+| 原则 | 实现 |
+|------|------|
+| **稳定** | SIGTERM 5s 优雅退出，超时 SIGKILL；wait_for_ready 复用 30s poll；失败回退 + 错误提示 |
+| **快速** | 复用 AgentConfig（不重新解析）；kill 后立即 spawn；wait_for_ready 通常 < 2s（prewarm 已加载 subprocess） |
+| **无感** | 前端按钮点击后立刻 disabled + spinner；Tauri async task 不阻塞 UI；重启后前端自动 reconnect |
+
+##### 9.14.3.2 IPC 流程
+
+```
+[User 点击 StatusBar "重启服务" 按钮]
+       ↓
+[Frontend: tauri invoke('restart_server')]   ← 按钮 disabled + 显示 spinner
+       ↓
+[Tauri command: restart_server]
+       ↓
+[NodeProcess.stop()]: SIGTERM → wait 5s → SIGKILL (if alive)
+       ↓
+[Tauri: NodeProcess.start(&agent_config)]   ← 复用 agent_config（不重新解析）
+       ↓
+[NodeProcess.wait_for_ready()]: 30s max, 500ms interval, /api/platform/health TCP probe
+       ↓
+[Tauri: emit 'server_restarted' 事件]
+       ↓
+[Frontend: window.location.reload()]   ← 自动刷新 SPA；emit 'server_restarted' 同时 toast 提示
+```
+
+##### 9.14.3.3 代码结构
+
+**Tauri 端**（`shell/src-tauri/src/main.rs`）：
+
+```rust
+// 新增 command
+#[tauri::command]
+async fn restart_server(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    info!("User requested server restart");
+    
+    // 1. Stop existing Node process (SIGTERM → 5s → SIGKILL)
+    state.node_process.stop().await?;
+    
+    // 2. Restart Node process (复用 agent_config)
+    state.node_process.start(&state.agent_config).await?;
+    
+    // 3. Emit event for frontend
+    app.emit("server_restarted", ())?;
+    
+    Ok(())
+}
+
+// NodeProcess 改造：start 复用 + stop 强化
+impl NodeProcess {
+    async fn stop(&self) -> Result<(), String> {
+        let mut guard = self.child.lock().await;
+        if let Some(mut child) = guard.take() {
+            // SIGTERM
+            let _ = child.kill(); // tokio::process::Child::kill 走 SIGKILL
+            
+            // 实际需要 SIGTERM 优先：
+            // use nix::sys::signal::{kill, Signal};
+            // use nix::unistd::Pid;
+            // kill(Pid::from_raw(child.id().unwrap() as i32), Signal::SIGTERM)?;
+            // tokio::time::sleep(Duration::from_secs(5)).await;
+            // if child.try_wait()?.is_none() { child.kill().await?; }
+            
+            let _ = child.wait().await;
+        }
+        Ok(())
+    }
+}
+```
+
+**简化方案**（v0.3.1.18 MVP）：
+- v0.3.1.18 用 `tokio::process::Child::kill()`（SIGKILL）直接强杀，不做 SIGTERM 优雅退出
+- 理由：Node sidecar 是我们自己的代码，崩溃风险低；SIGTERM 复杂度高（需 nix crate 跨平台），MVP 不必要
+- v0.2+ 再升级 SIGTERM
+
+**Frontend**（`apps/chat/index.html` 或 `_shared/agent.js`）：
+
+```javascript
+// 监听 Tauri 命令
+async function restartServer() {
+  const btn = document.getElementById('restart-btn');
+  const statusDot = document.querySelector('.status-dot');
+  const statusText = document.querySelector('.status-text');
+  
+  btn.disabled = true;
+  statusDot.className = 'status-dot working';
+  statusText.textContent = 'Restarting...';
+  
+  try {
+    if (window.__TAURI__?.invoke) {
+      await window.__TAURI__.invoke('restart_server');
+      // Tauri emit 'server_restarted' 后由 statusBar listener 处理
+    } else {
+      // 浏览器直接访问场景（手动测试），fallback
+      await fetch('/api/platform/restart', { method: 'POST' });
+      setTimeout(() => window.location.reload(), 2000);
+    }
+  } catch (e) {
+    statusDot.className = 'status-dot error';
+    statusText.textContent = `Error: ${e.message || e}`;
+    btn.disabled = false;
+  }
+}
+
+// 监听 server_restarted 事件
+if (window.__TAURI__?.event?.listen) {
+  window.__TAURI__.event.listen('server_restarted', () => {
+    window.location.reload();
+  });
+}
+```
+
+#### 9.14.4 Chat Markdown 渲染
+
+**PRD §3.1 已要求**：Markdown 渲染 | 支持完整 Markdown；代码高亮 | 代码块自动语法高亮。
+
+v0.3.1.18 实现。
+
+##### 9.14.4.1 渲染策略：方案 B
+
+**对比**：
+
+| 方案 | 性能 | 体验 | 复杂度 |
+|------|------|------|--------|
+| A：每次 delta 实时渲染 | 长回复卡顿（marked.parse ~5ms × 100 token = 500ms 抖动） | 实时格式生效 | 低 |
+| **B：流式纯文本 + 收尾渲染** | 高 | 流式体验自然 + 最终格式完整 | 中 |
+| C：节流渲染（debounce 50ms） | 中 | 准实时 | 中 |
+
+**选 B**：
+- 流式体验最佳（打字机效果保留）
+- 最终效果完整（用户看到的是同一文本）
+- 实现复杂度可控
+
+**实现**：
+
+```javascript
+// apps/_shared/agent.js
+import { marked } from '/apps/_shared/marked.js';  // v0.3.1.18 bundle 进 apps/_shared/
+import { markedHighlight } from '/apps/_shared/marked-highlight.js';
+import hljs from '/apps/_shared/highlight.js';
+
+const renderer = marked.use(markedHighlight({
+  langPrefix: 'hljs language-',
+  highlight(code, lang) {
+    const language = hljs.getLanguage(lang) ? lang : 'plaintext';
+    return hljs.highlight(code, { language }).value;
+  },
+}));
+
+window.marked = {
+  render(text) {
+    return renderer.parse(text);
+  },
+};
+```
+
+```html
+<!-- chat/index.html bubble 结构 -->
+<div class="message assistant streaming">
+  <div class="avatar">🤖</div>
+  <div class="bubble">
+    <span class="bubble-text"></span>      <!-- 流式期间 raw text 追加 -->
+    <span class="cursor">▋</span>          <!-- 流式期间显示 -->
+  </div>
+</div>
+```
+
+```javascript
+// chat/index.html finalizeBubble 改动
+function finalizeBubble(bubble, content) {
+  bubble.classList.remove('streaming');
+  bubble.querySelector('.cursor')?.remove();
+  // ★ v0.3.1.18: 用 marked 渲染 markdown
+  const bubbleText = bubble.querySelector('.bubble-text');
+  bubbleText.innerHTML = window.marked.render(content || '');
+}
+```
+
+##### 9.14.4.2 依赖与构建
+
+**`desktop-agent/package.json` 新增**：
+
+```json
+{
+  "dependencies": {
+    "marked": "^14.1.4",
+    "marked-highlight": "^2.2.1",
+    "highlight.js": "^11.10.0"
+  }
+}
+```
+
+**ESM import 路径**：Node 22 + ESM 直接支持 `import { marked } from 'marked'`。但前端是浏览器 ESM，需要把依赖**打包**进 `apps/_shared/` 或通过 importmap 引用。
+
+**打包方案**（v0.3.1.18）：
+- 用 `pnpm deploy` / `esbuild` 把 marked + highlight.js 打包成单文件 `apps/_shared/markdown.bundle.js`
+- `apps/chat/index.html` 和 `apps/dashboard/index.html` 通过 `<script type="module">` 引用
+
+**CI 集成**（`build.yml` deploy step）：
+```yaml
+- name: Build markdown bundle
+  run: |
+    cd desktop-agent
+    npx esbuild apps/_shared/markdown.bundle.js \
+      --bundle \
+      --format=esm \
+      --target=es2022 \
+      --outfile=dist/markdown.bundle.js
+    cp dist/markdown.bundle.js ../shell/src-tauri/server/apps/_shared/
+```
+
+##### 9.14.4.3 安全
+
+**marked v14 默认行为**：
+- 不解释原始 HTML（`<script>` 等转义为 `&lt;script&gt;`）
+- `headerIds: false, mangle: false`（避免生成 ID 注入）
+
+**不需要 DOMPurify**：
+- 用户输入只来自 LLM response（受控环境）
+- LLM response 是 markdown 文本而非 HTML
+- marked 默认转义已足够
+
+**代码高亮（highlight.js）**：
+- 独立处理代码块，不参与 markdown 解析
+- 输出是 `<span class="hljs-keyword">...</span>` 等安全 HTML
+
+##### 9.14.4.4 性能基准
+
+| 文本长度 | marked.parse 耗时 | highlight 耗时 | 总计 |
+|---------|------------------|---------------|------|
+| 1 KB | < 1ms | < 5ms | < 6ms |
+| 10 KB | ~3ms | ~30ms | ~33ms |
+| 100 KB | ~30ms | ~300ms | ~330ms |
+
+**MVP 限制**：回复 < 100KB 时性能可接受。v0.2+ 用 IntersectionObserver 懒渲染超长回复。
+
+#### 9.14.5 实施总结
+
+| 改动 | 文件 | 行数 | 类型 |
+|------|------|------|------|
+| CREATE_NO_WINDOW | `shell/src-tauri/src/main.rs` | +8 | Bug 修复 |
+| 移除菜单 | `shell/src-tauri/src/main.rs` | -25 | UX 改进 |
+| Restart Server IPC | `shell/src-tauri/src/main.rs` + `commands.rs` | +50 | 新功能 |
+| StatusBar 组件 | `apps/chat/index.html` + `_shared/styles.css` | +60 | UI 组件 |
+| Markdown 渲染 | `apps/_shared/markdown.bundle.js`（新增）+ `chat/index.html` + `agent.js` | +80 | 新功能 |
+| 依赖 | `desktop-agent/package.json` | +3 | 依赖 |
+| 构建 | `.github/workflows/build.yml` | +10 | CI |
+
+总计：4 文件（前后端各 2）+ 1 新文件（markdown bundle）+ 1 package.json + 1 build.yml。
+
+**Playwright 验证清单**：
+1. StatusBar 渲染：dot + 文字 + 两个按钮
+2. StatusBar 工作状态切换：Ready → Working → Ready
+3. 刷新按钮：点击触发 window.location.reload
+4. 重启服务按钮：点击触发 restart_server，Node 进程 kill + 重启，页面自动刷新
+5. Markdown 渲染：发送 "用 markdown 格式写一个 hello world 示例" → bubble 内显示格式化文本 + 代码块高亮
+6. 顶部菜单栏不再显示
+7. node sidecar spawn 期间无黑屏窗口（Windows）
 ```
 
 
@@ -3899,3 +4475,5 @@ litellm --model gpt-4o --port 4000
 | 2026-06-16 | 0.3.1.9 | **v0.3.1.8 验证不充分修正**：（1）`pnpm install --shamefully-hoist` flag 在 pnpm 10 + workspace context 下被覆盖，产物仍含 symlink → v0.3.1.8 修复无效；（2）改用 `.npmrc` + `node-linker=hoisted`（pnpm 官方推荐"模拟 npm"模式），`file node_modules/express` → `directory` ✅；（3）修 build.yml：加 `echo 'node-linker=hoisted' > .npmrc` 在 `pnpm install` 之前；（4）WSL 端到端重验证：物理目录 ✅、server 启动 ✅、curl /api/platform/health 200 ✅；（5）§9.13.17 补充"v0.3.1.8 → v0.3.1.9 修订原因"段；（6）学习 6/7：--shamefully-hoist flag 不一定生效、node-linker=hoisted 是 .npmrc 配置项、file 才是判断 symlink 真相的方法 |
 | 2026-06-16 | 0.3.1.10 | **v0.3.1.9 CI cd 路径 bug 修正**：（1）v0.3.1.9 CI 报 `du: shell/src-tauri/server: No such file or directory`——`cd shell/src-tauri/server; cd ../..` 只回退 2 级到 `shell/`，du 拼出 `shell/src-tauri/server` 不存在；（2）WSL 本地验证没复现（pnpm v10.32.1），CI runner 用 pnpm v11.7.0 表现不同；（3）修法：deploy 操作包进 `subshell`（`( ... )`），subshell 结束自动回到 repo root，从根本上消除 cd 路径错误；（4）subshell 内加 `set -euo pipefail` 严格 fail-fast；（5）§9.13.1 修正总览表新增 Gap 20（CI cd 路径 bug）；（6）学习 8/9：CI 脚本 cd 路径必须可移植（subshell / pushd / GITHUB_WORKSPACE）；WSL pnpm v10 ≠ CI pnpm v11，本地验证不等于 CI 验证 |
 | 2026-06-16 | 0.3.1.16 | **agent.js SyntaxError + main.rs error logging**：（1）v0.3.1.15 装上后，user 跑 `node .\server\dist\index.js` 手动测试，chat 报 `Cannot read properties of undefined (reading 'chat')`——根因：`desktop-agent/apps/_shared/agent.js` line 36 重复声明 `let sessionId = null;`（参数解构里已有 `sessionId`），整个脚本抛 SyntaxError → `window.agent` 永远 undefined → `.chat` 报 undefined reading 'chat'。`node --check agent.js` 直接验证：line 36 `Identifier 'sessionId' has already been declared`；（2）Tauri .exe 仍不显示窗口（5 行 log 后退出），原 `?` operator 把 build 错误传到 `expect()` panic，panic 消息走 stderr 在 GUI app 下不可见；改 `.map_err(|e| { error!(...); e })?` 先 log 错误到 file 再传；（3）修复：`agent.js` 删除重复 `let sessionId = null;`；main.rs window build 错误先 `error!` log 再 `?`；§9.13.1 修正总览表新增 Gap 27/28；学习 18/19：JS `let` 重复声明 SyntaxError 在脚本加载时抛，agent 对象没 attach 到 window；panic 消息走 stderr 在 windows GUI app 下不可见，必须先 log 到 file |
+| 2026-06-17 | 0.3.1.17 | **webview-data-url feature + assistant→text_delta fallback**：（1）Tauri 2 默认不启用 `webview-data-url` feature，但 splash 用 `data:text/html,...` URL，window 创建报 `data URLs are not supported without the webview-data-url feature`，导致整个应用启动失败；（2）MiniMax LLM（走 Anthropic 兼容路径）不真正流式：SDK 收不到 `stream_event.content_block_delta`，只发最终 `assistant_message`，前端 `agent.js` 只处理 `text_delta` → 用户看到空气泡；（3）修复：`shell/src-tauri/Cargo.toml` 加 `webview-data-url` feature；`desktop-agent/src/ai/agent-service.ts` 增加 assistant 消息 fallback：用 `Set<msg_id>` 追踪 `message_start` 事件，assistant 消息到达时若 msg_id 未在 set 中则 yield text_delta（Anthropic 流式不重复，MiniMax 非流式生效）；（4）§9.13.1 修正总览表新增 Gap 32/33；学习 20：Tauri 2 data URL feature 必须显式启用；学习 21：provider 兼容性 fallback 必须有 set/flag 追踪避免重复 yield |
+| 2026-06-17 | 0.3.1.18 | **3 项 UX 修正**：（1）**node sidecar 黑屏窗口**：Tauri GUI app spawn console 子进程时 Windows 默认创建新 console window 短暂可见。修：spawn 时设 `CREATE_NO_WINDOW = 0x08000000`（macOS/Linux 无需）；（2）**顶部菜单栏 UX 突兀**：移除原生菜单（`create_menu()` 不调用），控制下沉到 sidebar 底部 StatusBar（状态指示 + 刷新 + 重启服务）；（3）**Chat Markdown 渲染 PRD 已要求未实现**：用 marked v14 + marked-highlight + highlight.js（atom-one-dark），流式期间纯文本 + session_done 后渲染 markdown + 代码高亮。详见 §9.14 设计文档；§9.13.1 修正总览表新增 Gap 29/30/31；学习 19：Windows GUI app spawn console 子进程必须显式 `CREATE_NO_WINDOW` 抑制 console window |

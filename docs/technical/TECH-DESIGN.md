@@ -3548,6 +3548,19 @@ package.json   ← Node 解析入口
 >
 > 本节给出 v0.3.1.18 的设计决策。实测修正记录在 §9.13.18。
 
+#### 9.14.0 决策确认记录（2026-06-17 review）
+
+以下 4 项关键决策经 Benjamin review 确认（v0.3.1.18 实施依据）：
+
+| # | 决策点 | 选掄 | 理由 |
+|---|--------|------|------|
+| 1 | Restart Server 信号 | **SIGKILL MVP**（v0.2+ 升级 SIGTERM） | Node 是受控进程，崩溃风险低；不引入 nix crate 保持依赖精简 |
+| 2 | Markdown 渲染策略 | **方案 B**（流式纯文本 + session_done 后渲染） | 流式体验最佳 + 最终格式完整 |
+| 3 | highlight.js 语言范围 | **5 种**（js / ts / python / bash / json），按需 register | MVP 覆盖 90% 代码场景，体积控制 |
+| 4 | Marked bundle 方案 | **esbuild 单文件 bundle 进 `apps/_shared/`** | 离线可用 + 跨平台一致 + 不依赖 CDN |
+
+决策变更需重新 review 并更新本表。
+
 #### 9.14.1 菜单栏策略
 
 **决策**：**不显示 Tauri 原生菜单**。

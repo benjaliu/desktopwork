@@ -72,7 +72,48 @@ export class AgentService {
     }
 
     try {
+      // Track assistant message IDs that have been streamed via stream_event
+      // (message_start). Used to dedup fallback text_delta from the eventual
+      // assistant message — Anthropic streaming path emits the full assistant
+      // message AFTER all stream_event text_delta, so without dedup we'd
+      // double-yield. Non-streaming providers (e.g. MiniMax via Anthropic-
+      // compatible endpoint) never emit stream_event, so the set stays empty
+      // and we fallback to extracting text from the assistant message.
+      const streamedMsgIds = new Set<string>();
+
       for await (const msg of q) {
+        // Record msg_id from message_start so we know if a given assistant
+        // message was already streamed via stream_event.
+        if (msg.type === 'stream_event') {
+          const ev = (msg as any).event;
+          if (ev?.type === 'message_start' && ev?.message?.id) {
+            streamedMsgIds.add(ev.message.id);
+          }
+        }
+
+        // Fallback: when an assistant message arrives without any prior
+        // stream_event text_delta (non-streaming provider), yield text_delta
+        // events from its text content blocks. The frontend agent.js expects
+        // text_delta + session_done; without this fallback it sees nothing
+        // for MiniMax-style providers.
+        if (msg.type === 'assistant') {
+          const msgId = (msg as any).message?.id;
+          if (msgId && !streamedMsgIds.has(msgId)) {
+            const message = (msg as any).message;
+            if (message?.content) {
+              for (const block of message.content) {
+                if (block.type === 'text' && block.text) {
+                  yield {
+                    type: 'text_delta',
+                    delta: block.text,
+                    contentIndex: 0,
+                  };
+                }
+              }
+            }
+          }
+        }
+
         const event = convertSDKMessage(msg);
         if (event) yield event;
       }

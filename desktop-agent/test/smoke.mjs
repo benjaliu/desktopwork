@@ -35,7 +35,10 @@ const server = spawn(tsxBin, ['src/index.ts'], {
 
 console.log(`[smoke] spawned server pid=${server.pid}`);
 
-await sleep(3000);
+// Wait for server to start listening. On cold-startup with tsx loader +
+// claude-agent-sdk prewarm, server can take 5-8s; bumped from 3s for
+// reliability on slow runners (WSL2 / CI).
+await sleep(8000);
 
 // Health check
 const health = curl(`${BASE}/api/platform/health`);

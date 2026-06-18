@@ -24,7 +24,7 @@ export async function prewarmClaude(_cfg: DesktopWorkConfig): Promise<void> {
     warm = await startup({
       options: {
         cwd: PLATFORM_CWD,
-        env: buildEnv(cfg),
+        env: await buildEnv(cfg),
       },
       initializeTimeoutMs: 30_000,
     });

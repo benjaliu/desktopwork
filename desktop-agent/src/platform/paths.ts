@@ -14,6 +14,11 @@ export function getAppDataDir(): string {
 }
 
 export const APP_DATA_DIR = getAppDataDir();
+/**
+ * Redirects the Claude SDK away from ~/.claude/ so DesktopWork data stays isolated.
+ * The SDK writes sessions, statsig, todos, shell-snapshots, etc. here.
+ */
+export const CLAUDE_CONFIG_DIR = join(APP_DATA_DIR, '.claude');
 export const CONFIG_DIR   = join(APP_DATA_DIR, 'config', 'desktopwork');
 export const RUNTIME_DIR  = join(APP_DATA_DIR, 'data', 'desktopwork', 'runtime');
 export const LOG_DIR      = join(APP_DATA_DIR, 'logs');

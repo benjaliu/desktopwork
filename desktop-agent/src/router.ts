@@ -58,14 +58,17 @@ export function createRouter(): express.Express {
     try {
       const before = await loadConfig();
       const updated = await updateConfig(req.body);
-      // Invalidate warm subprocess when agent env (baseUrl/apiKey) changes.
+      // Invalidate warm subprocess when agent env (baseUrl/apiKeyRef/model) changes.
       // This forces a fresh startup() with the new ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN.
+      // Also invalidate if a plaintext apiKey was sent (it was written to keychain).
       if (req.body?.agent) {
         const agentBefore = before.agent ?? {};
         const agentAfter = updated.agent ?? {};
         if (
           agentAfter.baseUrl !== agentBefore.baseUrl ||
-          agentAfter.apiKey !== agentBefore.apiKey
+          agentAfter.apiKeyRef !== agentBefore.apiKeyRef ||
+          agentAfter.model !== agentBefore.model ||
+          'apiKey' in req.body.agent // plaintext field → keychain was updated
         ) {
           await invalidateWarmQuery();
         }

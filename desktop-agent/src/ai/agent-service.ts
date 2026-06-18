@@ -2,7 +2,8 @@
 import { query, type Options, type Query } from '@anthropic-ai/claude-agent-sdk';
 import { getWarmQuery, invalidateWarmQuery } from './startup-warmer.js';
 import { loadConfig } from '../platform/config.js';
-import { RUNTIME_DIR } from '../platform/paths.js';
+import { RUNTIME_DIR, CLAUDE_CONFIG_DIR } from '../platform/paths.js';
+import { getApiKey, resolveAccount } from '../platform/keychain.js';
 import { convertSDKMessage } from './event-converter.js';
 import type { AgentStreamEvent, AgentCallOptions } from './types.js';
 import type { DesktopWorkConfig } from '../platform/types.js';
@@ -22,11 +23,14 @@ const DEFAULT_ALLOWED_TOOLS = ['Read', 'Edit', 'Bash', 'Grep', 'Glob'];
  * KEY: SDK comment: `env` REPLACES the subprocess environment entirely.
  * Must spread `...process.env` so subprocess doesn't miss PATH / HOME etc.
  */
-export function buildEnv(cfg: DesktopWorkConfig): Record<string, string | undefined> {
+export async function buildEnv(cfg: DesktopWorkConfig): Promise<Record<string, string | undefined>> {
+  const account = resolveAccount(cfg.agent.apiKeyRef);
+  const apiKey = await getApiKey(account);
   return {
     ...process.env as Record<string, string>,
     ANTHROPIC_BASE_URL: cfg.agent.baseUrl || undefined,
-    ANTHROPIC_AUTH_TOKEN: cfg.agent.apiKey || undefined,
+    ANTHROPIC_AUTH_TOKEN: apiKey ?? undefined,
+    CLAUDE_CONFIG_DIR,
     CLAUDE_AGENT_SDK_CLIENT_APP: 'desktopwork/0.1.0',
     DISABLE_TELEMETRY: '1',
     NODE_NO_WARNINGS: '1',
@@ -42,7 +46,7 @@ export class AgentService {
    */
   async *stream(opts: AgentCallOptions): AsyncGenerator<AgentStreamEvent> {
     const cfg = await loadConfig();
-    const env = buildEnv(cfg);
+    const env = await buildEnv(cfg);
 
     const options: Options = {
       model: cfg.agent.model,

@@ -3,8 +3,13 @@ export type Level = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 
 export interface AgentConfig {
   provider: string;
+  /** Model name is a runtime parameter. NOT validated by the app — any string is passed through to the SDK. */
   model: string;
-  apiKey: string;
+  /**
+   * Reference to where the API key is stored. Format: 'keytar:<account>'.
+   * The actual key lives in OS keychain, NOT in this config file.
+   */
+  apiKeyRef: string;
   baseUrl?: string;
 }
 

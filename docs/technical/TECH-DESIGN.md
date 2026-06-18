@@ -438,7 +438,7 @@ export function convertSDKMessage(msg: SDKMessage): AgentStreamEvent | null {
 
 | 项 | 决策 |
 |----|------|
-| Session 存储 | 完全交给 SDK（存到 `~/.claude/projects/...`）|
+| Session 存储 | 完全交给 SDK（存到 `$CLAUDE_CONFIG_DIR/projects/...` = `APP_DATA_DIR/.claude/projects/...`）|
 | Session 续接 (`resume`) | 走 SDK 原生 `options.resume` |
 | 消息历史存储 | **不存**于平台，由 SDK 独占 |
 | Session 列表/元信息 | **不存**于平台，调 SDK `listSessions()` 拿 |
@@ -447,6 +447,8 @@ export function convertSDKMessage(msg: SDKMessage): AgentStreamEvent | null {
 | "当前会话"指针 | 前端 localStorage（v0.1）|
 | Session 备份/迁移 | 备份 `~/.claude/` 整个目录即可 |
 | 跨平台行为一致性 | ✅ 跟 Claude Code CLI 完全一致（共用同一套存储）|
+
+> **隔离方案**：通过 `CLAUDE_CONFIG_DIR` env var 隔离 Claude runtime，DesktopWork 不与系统 `~/.claude/` 共享任何数据。`settings.local.json` 会落在 `RUNTIME_DIR/.claude/`（仍在我们私有目录内），属可接受行为。
 
 > **2026-06-12 决策记录（两次修订）**：
 > - 修订 1：原 v0.1 中"平台存消息历史"被删除，避免双写一致性问题。
@@ -650,8 +652,10 @@ desktopwork/                          # 仓库根
     ├── desktop-agent.log
     └── claude-subprocess.log         # Claude subprocess 独立日志
 
-~/.claude/projects/-<encoded-cwd>/    # SDK 侧 Session 历史（详见 §3.8，不复制）
+APP_DATA_DIR/.claude/projects/-<encoded-cwd>/    # SDK 侧 Session 历史（详见 §3.8，不复制）
 └── <session-uuid>.jsonl
+
+.claude/  ← CLAUDE_CONFIG_DIR 指向这里，SDK 把所有状态文件（sessions、statsig、todos、shell-snapshots、credentials）都写到这里。
 ```
 
 **两层分工**（v0.1）：
@@ -726,7 +730,7 @@ interface DesktopWorkConfig {
   agent: {                                  // ★ 重命名为 agent（不叫 llm）
     provider: 'anthropic' | 'custom';       // 协议标识
     model: string;                          // 模型 ID
-    apiKey: string;                         // ⚠️ MVP 阶段明文（v0.2 加密）
+    apiKeyRef: string;                      // API key 存 OS keychain (keytar), config 仅存引用 `keytar:<account>`
     baseUrl?: string;                       // 自定义 Provider 端点
   };
   system: {
@@ -744,12 +748,16 @@ interface DesktopWorkConfig {
 
 ```typescript
 // src/ai/agent-service.ts
-export function buildEnv(cfg: DesktopWorkConfig): Record<string, string | undefined> {
+export async function buildEnv(cfg: DesktopWorkConfig): Promise<Record<string, string | undefined>> {
+  const account = resolveAccount(cfg.agent.apiKeyRef);
+  const apiKey = await getApiKey(account);
   return {
-    ...process.env,
-    ANTHROPIC_BASE_URL: cfg.agent.baseUrl,
-    ANTHROPIC_AUTH_TOKEN: ***
+    ...process.env as Record<string, string>,
+    ANTHROPIC_BASE_URL: cfg.agent.baseUrl || undefined,
+    ANTHROPIC_AUTH_TOKEN: apiKey ?? undefined,
+    CLAUDE_CONFIG_DIR: CLAUDE_CONFIG_DIR,
     CLAUDE_AGENT_SDK_CLIENT_APP: 'desktopwork/0.1.0',
+    DISABLE_TELEMETRY: '1',
   };
 }
 ```
@@ -854,11 +862,14 @@ export class AgentService {
     return JSON.parse(raw) as DesktopWorkConfig;
   }
 
-  private buildEnv(cfg: DesktopWorkConfig) {
+  private async buildEnv(cfg: DesktopWorkConfig) {
+    const account = resolveAccount(cfg.agent.apiKeyRef);
+    const apiKey = await getApiKey(account);
     return {
       ...process.env,
       ANTHROPIC_BASE_URL: cfg.agent.baseUrl,
-      ANTHROPIC_AUTH_TOKEN: ***
+      ANTHROPIC_AUTH_TOKEN: apiKey ?? undefined,
+      CLAUDE_CONFIG_DIR,                    // ★ 隔离 SDK 数据到 APP_DATA_DIR/.claude/
       CLAUDE_AGENT_SDK_CLIENT_APP: 'desktopwork/0.1.0',
       DISABLE_TELEMETRY: '1',
     };
@@ -1226,6 +1237,7 @@ export function getAppDataDir(): string {
 }
 
 export const APP_DATA_DIR = getAppDataDir();
+export const CLAUDE_CONFIG_DIR = join(APP_DATA_DIR, '.claude'); // SDK 数据隔离
 export const CONFIG_DIR   = join(APP_DATA_DIR, 'config', 'desktopwork');
 export const RUNTIME_DIR  = join(APP_DATA_DIR, 'data', 'desktopwork', 'runtime');
 export const LOG_DIR      = join(APP_DATA_DIR, 'logs');
@@ -1244,11 +1256,59 @@ export const CONFIG_PATH  = join(CONFIG_DIR, 'config.json');
 
 | 子目录 | 用途 |
 |--------|------|
-| `config/desktopwork/config.json` | 用户配置（LLM API key / baseUrl）|
+| `config/desktopwork/config.json` | 用户配置（LLM apiKeyRef / baseUrl）|
+| `.claude/` | CLAUDE_CONFIG_DIR（SDK 状态：sessions、statsig、todos 等）|
 | `data/desktopwork/runtime/` | PLATFORM_CWD（SDK session 存储目录）|
 | `logs/desktop-agent.log` | Platform 进程日志 |
 
 > **重要**：此模块**仅被 Node 进程**使用。Tauri 侧路径（资源、log）继续用 Tauri Path API（见 §9.4）。两边**互不干扰**——Tauri 不读 `app_data_dir`，Node 不读 `resourcesPath`。
+
+### 5.9 Keychain 集成（API key 安全存储）
+
+DesktopWork 把 Anthropic API key 存在 OS keychain，config.json 只存引用。
+
+| 平台 | 后端 | 库 |
+|------|------|-----|
+| macOS | Keychain | keytar |
+| Windows | Credential Vault | keytar |
+| Linux | libsecret (Secret Service) | keytar |
+
+**Keychain entry:**
+- Service: `com.benjamin.desktopwork`（同 bundle identifier）
+- Account: `anthropic`（或 `apiKeyRef` 指定）
+- Password: ANTHROPIC_AUTH_TOKEN 明文（keychain 自身加密）
+
+**Flow:**
+
+写入（用户改 API key）:
+```
+UI PUT /api/platform/config { agent: { apiKey: "sk-..." } }
+  → router.ts
+  → updateConfig() 调 setApiKey(account, key)
+  → 写 config.json (apiKey → apiKeyRef)
+  → invalidateWarmQuery
+```
+
+读取（每次 session）:
+```
+buildEnv(cfg):
+  account = resolveAccount(cfg.agent.apiKeyRef)
+  apiKey = await getApiKey(account)
+  return env with ANTHROPIC_AUTH_TOKEN = apiKey
+```
+
+**迁移** (兼容之前用明文 config):
+```
+migrateConfig(cfg):
+  if (cfg.agent.apiKey && !cfg.agent.apiKeyRef):
+    setApiKey('anthropic', cfg.agent.apiKey)
+    cfg.agent.apiKeyRef = 'keytar:anthropic'
+    delete cfg.agent.apiKey
+    write back to config.json
+    log: "[config] Migrated plaintext apiKey to OS keychain"
+```
+
+**降级策略：** keychain 不可用时直接报错（不静默降级到 env），UI 提示用户检查 keychain 访问权限。
 
 ---
 

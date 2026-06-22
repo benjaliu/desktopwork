@@ -232,7 +232,8 @@ impl NodeProcess {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .creation_flags(CREATE_NO_WINDOW);
+                .creation_flags(CREATE_NO_WINDOW)
+                .kill_on_drop(true);
             let child = cmd.spawn().map_err(|e| {
                 eprintln!("[desktopwork] spawn FAILED: {}", e);
                 format!("Failed to spawn Node process: {}", e)
@@ -247,6 +248,7 @@ impl NodeProcess {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
+                .kill_on_drop(true)
                 .spawn()
                 .map_err(|e| {
                     eprintln!("[desktopwork] spawn FAILED: {}", e);
@@ -516,14 +518,35 @@ fn main() {
                     error!("Failed to navigate to app: {}", e);
                 }
 
-                // Set up close handler after window is ready
-                let node_proc2 = Arc::clone(&node_proc_for_async);
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::CloseRequested { .. } = event {
-                        let np = Arc::clone(&node_proc2);
-                        tokio::spawn(async move {
-                            let _ = np.stop().await;
-                            std::process::exit(0);
+                // Set up close handler — must block until Node is killed so installer
+                // can replace files.
+                let node_proc_close = Arc::clone(&node_proc_for_async);
+                let window_close = window.clone();
+                let win = window_close.clone();
+                window_close.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        // Prevent the window from closing immediately — we want to kill Node first
+                        api.prevent_close();
+
+                        let np = Arc::clone(&node_proc_close);
+                        let window_for_thread = win.clone();
+
+                        // std::thread::spawn gives us a sync entry point. We need block_on
+                        // because NodeProcess::stop() is async (uses tokio mutex).
+                        std::thread::spawn(move || {
+                            tauri::async_runtime::block_on(async move {
+                                info!("Close requested: killing Node sidecar");
+                                if let Err(e) = np.stop().await {
+                                    warn!("stop() returned error: {}", e);
+                                }
+                            });
+                            // Now Node is dead. Close the window — Tauri will then exit
+                            // naturally since this is the main window, and kill_on_drop
+                            // is a redundant safety net at this point.
+                            info!("Node sidecar killed, closing window");
+                            if let Err(e) = window_for_thread.destroy() {
+                                warn!("win.destroy() returned error: {}", e);
+                            }
                         });
                     }
                 });

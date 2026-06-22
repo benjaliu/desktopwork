@@ -23,7 +23,17 @@ async function main() {
 
   const shutdown = (sig: string) => {
     logger.info(`received ${sig}, shutting down...`);
-    server.close(() => process.exit(0));
+    server.close(() => {
+      logger.info(`server closed, exiting`);
+      process.exit(0);
+    });
+    // Force exit after 3s if server.close() hangs (e.g., stuck long-poll).
+    // Critical for the app-update flow — installer waits for process exit.
+    // .unref() so the timer itself doesn't keep the event loop alive.
+    setTimeout(() => {
+      logger.warn(`shutdown timeout (3s), forcing exit`);
+      process.exit(1);
+    }, 3000).unref();
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
